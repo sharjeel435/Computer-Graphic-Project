@@ -16,6 +16,11 @@ import numpy as np
 SPECIES = {
     # name:  color (RGB), max_speed, boid_radius, weights (sep/ali/coh),
     #        wave magnitude, bioluminescent, preferred Y range, is_predator
+    "silver": dict(color=(0.75, 0.85, 0.95), speed=3.2, radius=2.5,
+                   w_sep=1.8, w_ali=2.2, w_coh=1.9,
+                   wave=0.06, bio=False,
+                   y_band=(-5.0, 10.0), predator=False),
+
     "neon":  dict(color=(0.10, 0.90, 1.00), speed=3.8, radius=3.0,
                   w_sep=1.9, w_ali=1.3, w_coh=1.0,
                   wave=0.08, bio=True,

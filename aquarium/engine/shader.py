@@ -342,13 +342,13 @@ void main() {
     vec2 uv = vPos.xy * 0.5 + 0.5;
 
     // ── Gradient ──────────────────────────────────────────────────────────────
-    vec3 top    = nightMode ? vec3(0.01, 0.02, 0.09) : vec3(0.04, 0.20, 0.50);
-    vec3 bottom = nightMode ? vec3(0.00, 0.01, 0.05) : vec3(0.01, 0.08, 0.28);
+    vec3 top    = nightMode ? vec3(0.01, 0.02, 0.09) : vec3(0.0, 0.25, 0.85);
+    vec3 bottom = nightMode ? vec3(0.00, 0.01, 0.05) : vec3(0.0, 0.05, 0.45);
     vec3 bg     = mix(bottom, top, uv.y);
 
     // ── Mid-water depth haze ──────────────────────────────────────────────────
     float haze  = fbm(uv * 3.5 + vec2(time * 0.05, 0.0));
-    vec3 hazeCol = nightMode ? vec3(0.01, 0.03, 0.12) : vec3(0.03, 0.18, 0.42);
+    vec3 hazeCol = nightMode ? vec3(0.01, 0.03, 0.12) : vec3(0.0, 0.20, 0.75);
     bg = mix(bg, hazeCol, haze * 0.18);
 
     if (!nightMode) {
@@ -537,7 +537,7 @@ class ShaderProgram:
     def set_bool (self, n, v):                  glUniform1i (self._loc(n), int(v))
     def set_int  (self, n, v):                  glUniform1i (self._loc(n), v)
     def set_float(self, n, v):                  glUniform1f (self._loc(n), v)
-    def set_vec2 (self, n, x, y):               glUniform2f (self._loc(n), x, y)
+    def set_vec2 (self, n, v):                  glUniform2f (self._loc(n), *v)
     def set_vec3 (self, n, v):                  glUniform3f (self._loc(n), *v)
     def set_mat4 (self, n, m):
         glUniformMatrix4fv(self._loc(n), 1, GL_FALSE, m.astype(np.float32))

@@ -59,11 +59,12 @@ BOUNDS        = 15.0
 VERSION       = "2.0 — All-Time Best Edition"
 
 FLOCK_CONFIG = [
-    ("neon",  18),
-    ("clown", 14),
-    ("angel", 12),
-    ("manta",  8),
-    ("jelly", 10),
+    ("silver", 160), # Massive dense school of silver fish mimicking the image!
+    ("neon",   15),
+    ("angel",  8),
+    ("clown",  10),
+    ("manta",  4),
+    ("jelly",  5),
 ]
 
 # ─── Splash Screen ────────────────────────────────────────────────────────────
@@ -436,5 +437,11 @@ class AquariumApp:
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import sys
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
     _print_splash()
     AquariumApp().run()

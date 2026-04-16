@@ -153,7 +153,7 @@ def _make_coral_geometry():
     idx = 0
 
     def cylinder(bx, bz, ybot, ytop, r_bot, r_top, n=10):
-        nonlocal idx
+        nonlocal idx, verts, indices
         for i in range(n):
             a0 = 2 * math.pi * i / n
             a1 = 2 * math.pi * (i + 1) / n
@@ -298,6 +298,7 @@ def _upload_verts_only(verts: np.ndarray, attribs: list) -> tuple:
 
 # Species-level visual config (colour, scale, predator flag)
 SPECIES_CONFIG = {
+    "silver": dict(color=(0.75, 0.85, 0.95), scale=0.45, predator=False),
     "neon":  dict(color=(0.10, 0.90, 1.00), scale=0.55, predator=False),
     "clown": dict(color=(1.00, 0.50, 0.10), scale=0.65, predator=False),
     "angel": dict(color=(0.70, 0.20, 1.00), scale=0.60, predator=False),
@@ -306,12 +307,12 @@ SPECIES_CONFIG = {
 }
 
 CORAL_COLORS = [
-    (0.95, 0.30, 0.40),
-    (1.00, 0.60, 0.15),
-    (0.30, 0.85, 0.70),
-    (0.90, 0.25, 0.60),
-    (0.50, 0.90, 0.30),
-    (0.20, 0.60, 1.00),
+    (1.00, 0.05, 0.50), # Vibrant magenta/pink from image
+    (0.90, 0.15, 0.65),
+    (1.00, 0.10, 0.45),
+    (0.85, 0.05, 0.55),
+    (1.00, 0.20, 0.60),
+    (0.95, 0.00, 0.40),
 ]
 
 
