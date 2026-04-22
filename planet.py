@@ -22,6 +22,7 @@ class Planet:
         specular=0.35,
         emissive=False,
         parent=None,
+        alpha=1.0,
     ):
         self.name = name
         self.radius = radius
@@ -34,6 +35,7 @@ class Planet:
         self.specular = specular
         self.emissive = emissive
         self.parent = parent
+        self.alpha = alpha
         self.children = []
         self.orbit_angle = 0.0
         self.rotation_angle = 0.0
@@ -79,7 +81,7 @@ class Planet:
         set_float(shader_program, "uSpecularStrength", self.specular)
         set_float(shader_program, "uShininess", self.shininess)
         set_int(shader_program, "uEmissive", 1 if self.emissive else 0)
-        set_float(shader_program, "uAlpha", 1.0)
+        set_float(shader_program, "uAlpha", self.alpha)
         set_mat4(shader_program, "uModel", self.model_matrix())
         mesh.draw()
 

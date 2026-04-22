@@ -36,7 +36,7 @@ import pygame
 from OpenGL.GL import *
 
 from camera import Camera
-from geometry import create_asteroid_belt, create_orbit_line, create_ring, create_screen_quad, create_starfield, create_uv_sphere
+from geometry import create_asteroid_belt, create_dynamic_line_strip, create_orbit_line, create_ring, create_screen_quad, create_starfield, create_uv_sphere
 from planet import Planet, SaturnRing
 from shaders import (
     ASTEROID_FRAGMENT_SHADER,
@@ -91,6 +91,7 @@ def require_assets():
         "saturn_ring.png",
         "uranus.jpg",
         "neptune.jpg",
+        "earth_clouds.png",
     ]
     missing = [name for name in required if not os.path.exists(os.path.join(ASSET_DIR, name))]
     if missing:
@@ -155,7 +156,8 @@ def create_scene(textures):
 
     moon = Planet("Moon", 0.62, 4.2, 5.7, 1.4, 5.1, textures["moon.jpg"], 16.0, 0.14, False, earth)
     ring = SaturnRing(saturn, textures["saturn_ring.png"])
-    return sun, planets, moon, ring
+    clouds = Planet("Earth Clouds", 2.48, 0.0, 0.0, 1.15, 0.0, textures["earth_clouds.png"], 8.0, 0.06, False, earth, alpha=0.46)
+    return sun, planets, moon, ring, clouds
 
 
 def update_orbits(sun, planets, dt, simulation_speed):
@@ -179,6 +181,7 @@ def main():
     glow_quad = create_screen_quad()
     stars = create_starfield(count=2400, radius=1200.0)
     asteroid_belt = create_asteroid_belt(count=1400)
+    comet_trail = create_dynamic_line_strip(max_points=220)
     orbit_lines = []
     for name, _radius, orbit_radius, _orbit_speed, _rotation_speed, inclination, *_rest in PLANET_DATA:
         orbit_lines.append((name, create_orbit_line(orbit_radius, inclination), glm.mat4(1.0)))
@@ -195,9 +198,10 @@ def main():
         "saturn_ring.png",
         "uranus.jpg",
         "neptune.jpg",
+        "earth_clouds.png",
     ]
     textures = {name: load_texture(os.path.join(ASSET_DIR, name)) for name in texture_names}
-    sun, planets, moon, saturn_ring = create_scene(textures)
+    sun, planets, moon, saturn_ring, earth_clouds = create_scene(textures)
     earth = next(planet for planet in planets if planet.name == "Earth")
     moon_orbit_line = create_orbit_line(moon.orbit_radius, moon.inclination, segments=96)
     text_renderer = TextRenderer(text_program, WIDTH, HEIGHT)
@@ -210,15 +214,18 @@ def main():
     selected_index = 2
     follow_mode = False
     cinematic_mode = False
+    presentation_mode = False
     show_labels = True
     show_orbits = True
+    show_principles = True
+    comet_points = []
     last_time = time.perf_counter()
     frame_counter = 0
     fps_timer = time.perf_counter()
 
     print(f"OpenGL: {version}")
     print("Controls: WASD move, Q/E up/down, mouse look, wheel FOV, +/- speed, SPACE pause")
-    print("Advanced: TAB select planet, F follow, C cinematic, L labels, O orbit guides, ESC quit")
+    print("Advanced: TAB select planet, F follow, C cinematic, P presentation, L labels, O orbit guides, G principles, ESC quit")
 
     while running:
         now = time.perf_counter()
@@ -242,10 +249,17 @@ def main():
                 elif event.key == pygame.K_c:
                     cinematic_mode = not cinematic_mode
                     follow_mode = False
+                    presentation_mode = False
+                elif event.key == pygame.K_p:
+                    presentation_mode = not presentation_mode
+                    cinematic_mode = False
+                    follow_mode = False
                 elif event.key == pygame.K_l:
                     show_labels = not show_labels
                 elif event.key == pygame.K_o:
                     show_orbits = not show_orbits
+                elif event.key == pygame.K_g:
+                    show_principles = not show_principles
                 elif event.key in (pygame.K_EQUALS, pygame.K_KP_PLUS):
                     simulation_speed = min(5.0, simulation_speed * 1.25)
                 elif event.key == pygame.K_MINUS:
@@ -256,7 +270,15 @@ def main():
                 camera.process_scroll(event.y)
 
         selected_planet = planets[selected_index]
-        if cinematic_mode:
+        if presentation_mode:
+            selected_index = int((now * 0.14) % len(planets))
+            selected_planet = planets[selected_index]
+            target = selected_planet.world_position
+            sweep = now * 0.28
+            distance = max(20.0, selected_planet.radius * 11.0)
+            camera.position = target + glm.vec3(math.cos(sweep) * distance, selected_planet.radius * 4.2 + 9.0, math.sin(sweep) * distance)
+            camera.look_at(target)
+        elif cinematic_mode:
             orbit_t = now * 0.08
             camera.position = glm.vec3(math.cos(orbit_t) * 155.0, 72.0 + math.sin(orbit_t * 0.7) * 20.0, math.sin(orbit_t) * 155.0)
             camera.look_at(glm.vec3(0.0, 0.0, 0.0))
@@ -268,6 +290,10 @@ def main():
             camera.process_keyboard(dt)
         if not paused:
             update_orbits(sun, planets, dt, simulation_speed)
+        comet_pos = comet_position(now)
+        comet_points.append((comet_pos.x, comet_pos.y, comet_pos.z))
+        if len(comet_points) > 220:
+            comet_points.pop(0)
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
@@ -294,6 +320,9 @@ def main():
             set_vec4(line_program, "uColor", (0.70, 0.80, 1.00, 0.36))
             set_mat4(line_program, "uModel", earth.orbital_matrix())
             moon_orbit_line.draw()
+            set_vec4(line_program, "uColor", (0.35, 0.90, 1.00, 0.50))
+            set_mat4(line_program, "uModel", glm.mat4(1.0))
+            comet_trail.update_and_draw(comet_points)
 
         glUseProgram(asteroid_program)
         set_mat4(asteroid_program, "uView", view)
@@ -312,6 +341,9 @@ def main():
         set_mat4(glow_program, "uView", view)
         set_mat4(glow_program, "uProjection", projection)
         glow_quad.draw()
+        set_vec3(glow_program, "uCenter", comet_pos)
+        set_float(glow_program, "uSize", 3.2)
+        glow_quad.draw()
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         glDepthMask(GL_TRUE)
 
@@ -326,6 +358,11 @@ def main():
         for planet in planets:
             planet.draw(sphere_mesh, planet_program)
         moon.draw(sphere_mesh, planet_program)
+
+        glEnable(GL_BLEND)
+        glDepthMask(GL_FALSE)
+        earth_clouds.draw(sphere_mesh, planet_program)
+        glDepthMask(GL_TRUE)
 
         glEnable(GL_BLEND)
         glDepthMask(GL_FALSE)
@@ -344,10 +381,13 @@ def main():
                     continue
                 color = (1.0, 0.86, 0.45, 1.0) if body.name == selected_planet.name else (0.74, 0.88, 1.0, 0.92)
                 text_renderer.draw(body.name, screen[0] + 7, screen[1] - 9, color, small=True)
-        mode = "CINEMATIC" if cinematic_mode else ("FOLLOW" if follow_mode else "FREE")
-        text_renderer.draw("ADVANCED SOLAR SYSTEM ENGINE", 16, 16, (1.0, 0.86, 0.36, 1.0))
+        mode = "PRESENTATION" if presentation_mode else ("CINEMATIC" if cinematic_mode else ("FOLLOW" if follow_mode else "FREE"))
+        text_renderer.draw("ALL-TIME BEST SOLAR SYSTEM ENGINE", 16, 16, (1.0, 0.86, 0.36, 1.0))
         text_renderer.draw(f"Mode: {mode} | Selected: {selected_planet.name} | Speed: {simulation_speed:.2f}x | FPS target: 60", 16, 40, (0.78, 0.92, 1.0, 0.95), small=True)
-        text_renderer.draw("TAB select | F follow | C cinematic | L labels | O orbits | +/- speed | SPACE pause", 16, 60, (0.70, 0.82, 0.95, 0.86), small=True)
+        text_renderer.draw("TAB select | F follow | C cinematic | P presentation | G principles | L labels | O orbits", 16, 60, (0.70, 0.82, 0.95, 0.86), small=True)
+        draw_planet_panel(text_renderer, selected_planet, 16, HEIGHT - 124)
+        if show_principles:
+            draw_principles_panel(text_renderer, WIDTH - 430, 18)
         glEnable(GL_DEPTH_TEST)
 
         pygame.display.flip()
@@ -377,6 +417,37 @@ def project_to_screen(world_pos, view, projection):
     if x < -80 or x > WIDTH + 80 or y < -80 or y > HEIGHT + 80:
         return None
     return x, y
+
+
+def comet_position(t):
+    angle = t * 0.34
+    radius = 78.0 + math.sin(t * 0.17) * 12.0
+    return glm.vec3(math.cos(angle) * radius, 10.0 + math.sin(angle * 1.7) * 18.0, math.sin(angle) * radius * 0.62)
+
+
+def draw_planet_panel(text_renderer, planet, x, y):
+    text_renderer.draw("SELECTED BODY", x, y, (1.0, 0.82, 0.36, 1.0), small=True)
+    text_renderer.draw(f"{planet.name}", x, y + 20, (0.85, 0.95, 1.0, 1.0))
+    text_renderer.draw(f"Orbit radius: {planet.orbit_radius:.1f} | Orbit speed: {planet.orbit_speed:.3f}", x, y + 46, (0.68, 0.84, 1.0, 0.95), small=True)
+    text_renderer.draw(f"Self rotation: {planet.rotation_speed:.2f} | Shininess: {planet.shininess:.0f}", x, y + 66, (0.68, 0.84, 1.0, 0.95), small=True)
+    text_renderer.draw("Scene graph + MVP + texture + Phong material", x, y + 86, (0.72, 1.0, 0.72, 0.95), small=True)
+
+
+def draw_principles_panel(text_renderer, x, y):
+    lines = [
+        "CG PRINCIPLES DEMONSTRATED",
+        "1. VAO/VBO/EBO indexed UV spheres",
+        "2. GLSL 330 vertex + fragment shaders",
+        "3. Model-View-Projection matrix pipeline",
+        "4. Phong lighting from emissive Sun",
+        "5. Scene graph: Earth -> Moon -> Clouds",
+        "6. Transparent blending: Saturn rings/clouds",
+        "7. Instancing: 1400 asteroid draw calls -> 1",
+        "8. Starfield point sprites + billboard glow",
+    ]
+    for i, line in enumerate(lines):
+        color = (1.0, 0.86, 0.38, 1.0) if i == 0 else (0.72, 0.88, 1.0, 0.92)
+        text_renderer.draw(line, x, y + i * 20, color, small=True)
 
 
 if __name__ == "__main__":

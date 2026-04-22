@@ -74,6 +74,23 @@ class AsteroidBeltMesh:
         glBindVertexArray(0)
 
 
+@dataclass
+class DynamicLineStrip:
+    vao: int
+    vbo: int
+    max_points: int
+
+    def update_and_draw(self, points):
+        if len(points) < 2:
+            return
+        arr = np.asarray(points[-self.max_points :], dtype=np.float32)
+        glBindVertexArray(self.vao)
+        glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
+        glBufferSubData(GL_ARRAY_BUFFER, 0, arr.nbytes, arr)
+        glDrawArrays(GL_LINE_STRIP, 0, len(arr))
+        glBindVertexArray(0)
+
+
 def upload_indexed_mesh(vertices, indices):
     """Upload interleaved position/normal/uv vertices to GPU buffers."""
     vao = glGenVertexArrays(1)
@@ -228,6 +245,18 @@ def create_screen_quad():
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(8))
     glBindVertexArray(0)
     return QuadMesh(vao, vbo)
+
+
+def create_dynamic_line_strip(max_points=256):
+    vao = glGenVertexArrays(1)
+    vbo = glGenBuffers(1)
+    glBindVertexArray(vao)
+    glBindBuffer(GL_ARRAY_BUFFER, vbo)
+    glBufferData(GL_ARRAY_BUFFER, max_points * 3 * ctypes.sizeof(ctypes.c_float), None, GL_DYNAMIC_DRAW)
+    glEnableVertexAttribArray(0)
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * ctypes.sizeof(ctypes.c_float), ctypes.c_void_p(0))
+    glBindVertexArray(0)
+    return DynamicLineStrip(vao, vbo, max_points)
 
 
 def create_asteroid_belt(count=1200, inner_radius=38.0, outer_radius=46.0):
