@@ -8,13 +8,13 @@ import pygame
 
 class Camera:
     def __init__(self, position=None):
-        self.position = position if position is not None else glm.vec3(0.0, 95.0, 230.0)
+        self.position = position if position is not None else glm.vec3(0.0, 80.0, 185.0)
         self.front = glm.vec3(0.0, -0.26, -1.0)
         self.world_up = glm.vec3(0.0, 1.0, 0.0)
         self.right = glm.vec3(1.0, 0.0, 0.0)
         self.up = glm.vec3(0.0, 1.0, 0.0)
         self.yaw = -90.0
-        self.pitch = -15.0
+        self.pitch = -23.4
         self.speed = 95.0
         self.mouse_sensitivity = 0.11
         self.fov = 45.0

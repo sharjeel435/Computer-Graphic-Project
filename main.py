@@ -63,7 +63,8 @@ from ui_text import TextRenderer
 
 
 WIDTH, HEIGHT = 1400, 900
-ASSET_DIR = "assets"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ASSET_DIR = os.path.join(BASE_DIR, "assets")
 
 
 PLANET_DATA = [
@@ -103,6 +104,7 @@ def require_assets():
 
 
 def init_window():
+    os.environ.setdefault("SDL_VIDEO_CENTERED", "1")
     pygame.init()
     pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
     pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3)
@@ -111,10 +113,10 @@ def init_window():
     pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
     pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 1)
     pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 4)
-    pygame.display.set_mode((WIDTH, HEIGHT), pygame.OPENGL | pygame.DOUBLEBUF)
+    pygame.display.set_mode((WIDTH, HEIGHT), pygame.OPENGL | pygame.DOUBLEBUF | pygame.SHOWN)
     pygame.display.set_caption("Modern OpenGL 3.3 Solar System")
-    pygame.event.set_grab(True)
-    pygame.mouse.set_visible(False)
+    pygame.event.set_grab(False)
+    pygame.mouse.set_visible(True)
 
     glViewport(0, 0, WIDTH, HEIGHT)
     glEnable(GL_DEPTH_TEST)
@@ -218,14 +220,15 @@ def main():
     show_labels = True
     show_orbits = True
     show_principles = True
+    mouse_captured = False
     comet_points = []
     last_time = time.perf_counter()
     frame_counter = 0
     fps_timer = time.perf_counter()
 
-    print(f"OpenGL: {version}")
-    print("Controls: WASD move, Q/E up/down, mouse look, wheel FOV, +/- speed, SPACE pause")
-    print("Advanced: TAB select planet, F follow, C cinematic, P presentation, L labels, O orbit guides, G principles, ESC quit")
+    print(f"OpenGL: {version}", flush=True)
+    print("Controls: WASD move, Q/E up/down, M mouse look, wheel FOV, +/- speed, SPACE pause", flush=True)
+    print("Advanced: TAB select planet, F follow, C cinematic, P presentation, L labels, O orbit guides, G principles, ESC quit", flush=True)
 
     while running:
         now = time.perf_counter()
@@ -260,12 +263,17 @@ def main():
                     show_orbits = not show_orbits
                 elif event.key == pygame.K_g:
                     show_principles = not show_principles
+                elif event.key == pygame.K_m:
+                    mouse_captured = not mouse_captured
+                    pygame.event.set_grab(mouse_captured)
+                    pygame.mouse.set_visible(not mouse_captured)
                 elif event.key in (pygame.K_EQUALS, pygame.K_KP_PLUS):
                     simulation_speed = min(5.0, simulation_speed * 1.25)
                 elif event.key == pygame.K_MINUS:
                     simulation_speed = max(0.05, simulation_speed / 1.25)
             elif event.type == pygame.MOUSEMOTION:
-                camera.process_mouse(event.rel[0], event.rel[1])
+                if mouse_captured:
+                    camera.process_mouse(event.rel[0], event.rel[1])
             elif event.type == pygame.MOUSEWHEEL:
                 camera.process_scroll(event.y)
 
@@ -384,7 +392,7 @@ def main():
         mode = "PRESENTATION" if presentation_mode else ("CINEMATIC" if cinematic_mode else ("FOLLOW" if follow_mode else "FREE"))
         text_renderer.draw("ALL-TIME BEST SOLAR SYSTEM ENGINE", 16, 16, (1.0, 0.86, 0.36, 1.0))
         text_renderer.draw(f"Mode: {mode} | Selected: {selected_planet.name} | Speed: {simulation_speed:.2f}x | FPS target: 60", 16, 40, (0.78, 0.92, 1.0, 0.95), small=True)
-        text_renderer.draw("TAB select | F follow | C cinematic | P presentation | G principles | L labels | O orbits", 16, 60, (0.70, 0.82, 0.95, 0.86), small=True)
+        text_renderer.draw("TAB select | M mouse | F follow | C cinematic | P presentation | G principles | L labels | O orbits", 16, 60, (0.70, 0.82, 0.95, 0.86), small=True)
         draw_planet_panel(text_renderer, selected_planet, 16, HEIGHT - 124)
         if show_principles:
             draw_principles_panel(text_renderer, WIDTH - 430, 18)
@@ -455,5 +463,5 @@ if __name__ == "__main__":
         main()
     except Exception as exc:
         pygame.quit()
-        print(f"[fatal] {exc}")
+        print(f"[fatal] {exc}", flush=True)
         sys.exit(1)
