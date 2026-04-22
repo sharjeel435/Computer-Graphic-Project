@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#05070f" />
+    <title>OpenGL Solar System</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main id="app">
+      <canvas id="scene" aria-label="Interactive 3D solar system"></canvas>
+
+      <section class="hud hud-left" aria-label="Solar system controls">
+        <h1>Solar System Engine</h1>
+        <div class="status-row">
+          <span id="mode">Free</span>
+          <span id="selected">Earth</span>
+          <span id="speed">1.00x</span>
+        </div>
+        <div class="toolbar" aria-label="View controls">
+          <button id="prev" type="button" title="Previous planet">‹</button>
+          <button id="play" type="button" title="Pause or resume">Ⅱ</button>
+          <button id="next" type="button" title="Next planet">›</button>
+          <button id="follow" type="button" title="Follow selected planet">⌖</button>
+          <button id="cinematic" type="button" title="Cinematic orbit">◎</button>
+        </div>
+        <label class="slider">
+          <span>Speed</span>
+          <input id="speedRange" type="range" min="0" max="4" value="1" step="0.05" />
+        </label>
+      </section>
+
+      <section class="hud hud-right" aria-label="Computer graphics principles">
+        <h2>CG Principles</h2>
+        <p>Textured spheres, hierarchical orbits, Phong-style lighting, transparent rings, star particles, and camera projection.</p>
+      </section>
+
+      <section class="planet-card" aria-label="Selected body">
+        <span>Selected Body</span>
+        <strong id="planetName">Earth</strong>
+        <p id="planetStats">Orbit radius 25.0 · Rotation 3.2</p>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
