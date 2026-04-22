@@ -1,13 +1,12 @@
 @echo off
-title Time-Reversal Physics Simulator
+title Advanced OpenGL Solar System
 echo ============================================================
-echo   TIME-REVERSAL PHYSICS SIMULATOR
+echo   ADVANCED OPENGL 3.3 SOLAR SYSTEM
 echo ============================================================
 echo.
 echo   Checking dependencies...
 python -m pip install -r requirements.txt --quiet
-echo   Dependencies verified.
+echo   Starting simulation...
 echo.
-echo   Starting Launcher...
 python main.py
 pause
