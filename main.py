@@ -41,12 +41,18 @@ from planet import Planet, SaturnRing
 from shaders import (
     ASTEROID_FRAGMENT_SHADER,
     ASTEROID_VERTEX_SHADER,
+    ATMOSPHERE_FRAGMENT_SHADER,
+    ATMOSPHERE_VERTEX_SHADER,
+    BLUR_FRAG,
+    BRIGHTNESS_EXTRACT_FRAG,
+    COMPOSITE_FRAG,
     GLOW_FRAGMENT_SHADER,
     GLOW_VERTEX_SHADER,
     LINE_FRAGMENT_SHADER,
     LINE_VERTEX_SHADER,
     PLANET_FRAGMENT_SHADER,
     PLANET_VERTEX_SHADER,
+    POST_VERTEX_SHADER,
     STAR_FRAGMENT_SHADER,
     STAR_VERTEX_SHADER,
     TEXT_FRAGMENT_SHADER,
@@ -111,16 +117,13 @@ def init_window():
     pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_CORE)
     pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
     pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
-    pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 1)
-    pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 4)
     pygame.display.set_mode((WIDTH, HEIGHT), pygame.OPENGL | pygame.DOUBLEBUF | pygame.SHOWN)
-    pygame.display.set_caption("Modern OpenGL 3.3 Solar System")
+    pygame.display.set_caption("Advanced OpenGL 3.3 Solar System — HDR Bloom")
     pygame.event.set_grab(False)
     pygame.mouse.set_visible(True)
 
     glViewport(0, 0, WIDTH, HEIGHT)
     glEnable(GL_DEPTH_TEST)
-    glEnable(GL_MULTISAMPLE)
     glEnable(GL_PROGRAM_POINT_SIZE)
     glEnable(GL_BLEND)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -130,6 +133,48 @@ def init_window():
     if not version.startswith("3.") and not version.startswith("4."):
         print(f"[warning] OpenGL version is {version}; requested 3.3 core profile.")
     return version
+
+
+def create_hdr_fbo(width, height):
+    """Floating-point HDR framebuffer the scene is rendered into."""
+    fbo = glGenFramebuffers(1)
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo)
+    tex = glGenTextures(1)
+    glBindTexture(GL_TEXTURE_2D, tex)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, width, height, 0, GL_RGB, GL_FLOAT, None)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0)
+    rbo = glGenRenderbuffers(1)
+    glBindRenderbuffer(GL_RENDERBUFFER, rbo)
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height)
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rbo)
+    if glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE:
+        print("[warning] HDR FBO not complete — bloom disabled.")
+    glBindFramebuffer(GL_FRAMEBUFFER, 0)
+    return fbo, tex
+
+
+def create_ping_pong_fbos(width, height):
+    """Two half-res FBOs used for separable Gaussian blur."""
+    fbos, texs = [], []
+    for _ in range(2):
+        fbo = glGenFramebuffers(1)
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo)
+        tex = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, tex)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, width // 2, height // 2, 0, GL_RGB, GL_FLOAT, None)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0)
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        fbos.append(fbo)
+        texs.append(tex)
+    return fbos, texs
 
 
 def create_scene(textures):
@@ -177,10 +222,15 @@ def main():
     line_program = create_program(LINE_VERTEX_SHADER, LINE_FRAGMENT_SHADER)
     glow_program = create_program(GLOW_VERTEX_SHADER, GLOW_FRAGMENT_SHADER)
     asteroid_program = create_program(ASTEROID_VERTEX_SHADER, ASTEROID_FRAGMENT_SHADER)
+    atmosphere_program = create_program(ATMOSPHERE_VERTEX_SHADER, ATMOSPHERE_FRAGMENT_SHADER)
     text_program = create_program(TEXT_VERTEX_SHADER, TEXT_FRAGMENT_SHADER)
+    extract_program = create_program(POST_VERTEX_SHADER, BRIGHTNESS_EXTRACT_FRAG)
+    blur_program = create_program(POST_VERTEX_SHADER, BLUR_FRAG)
+    composite_program = create_program(POST_VERTEX_SHADER, COMPOSITE_FRAG)
     sphere_mesh = create_uv_sphere(stacks=48, slices=96)
     ring_mesh = create_ring()
     glow_quad = create_screen_quad()
+    post_quad = create_screen_quad()
     stars = create_starfield(count=2400, radius=1200.0)
     asteroid_belt = create_asteroid_belt(count=1400)
     comet_trail = create_dynamic_line_strip(max_points=220)
@@ -208,6 +258,10 @@ def main():
     moon_orbit_line = create_orbit_line(moon.orbit_radius, moon.inclination, segments=96)
     text_renderer = TextRenderer(text_program, WIDTH, HEIGHT)
 
+    # HDR + Bloom FBOs
+    hdr_fbo, hdr_tex = create_hdr_fbo(WIDTH, HEIGHT)
+    ping_pong_fbos, ping_pong_texs = create_ping_pong_fbos(WIDTH, HEIGHT)
+
     camera = Camera()
     clock = pygame.time.Clock()
     running = True
@@ -225,10 +279,12 @@ def main():
     last_time = time.perf_counter()
     frame_counter = 0
     fps_timer = time.perf_counter()
+    current_fps = 60.0
+    screenshot_counter = 0
 
     print(f"OpenGL: {version}", flush=True)
     print("Controls: WASD move, Q/E up/down, M mouse look, wheel FOV, +/- speed, SPACE pause", flush=True)
-    print("Advanced: TAB select planet, F follow, C cinematic, P presentation, L labels, O orbit guides, G principles, ESC quit", flush=True)
+    print("Keys 1-8 jump to planet | F12 screenshot | F follow | C cinematic | P presentation | ESC quit", flush=True)
 
     while running:
         now = time.perf_counter()
@@ -271,6 +327,23 @@ def main():
                     simulation_speed = min(5.0, simulation_speed * 1.25)
                 elif event.key == pygame.K_MINUS:
                     simulation_speed = max(0.05, simulation_speed / 1.25)
+                # Keys 1-8: jump directly to a planet
+                elif event.key in (
+                    pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4,
+                    pygame.K_5, pygame.K_6, pygame.K_7, pygame.K_8,
+                ):
+                    idx = event.key - pygame.K_1
+                    if 0 <= idx < len(planets):
+                        selected_index = idx
+                        follow_mode = True
+                        cinematic_mode = False
+                        presentation_mode = False
+                # F12: screenshot
+                elif event.key == pygame.K_F12:
+                    screenshot_counter += 1
+                    fname = os.path.join(BASE_DIR, f"screenshot_{screenshot_counter:04d}.png")
+                    pygame.image.save(pygame.display.get_surface(), fname)
+                    print(f"[screenshot] saved {fname}", flush=True)
             elif event.type == pygame.MOUSEMOTION:
                 if mouse_captured:
                     camera.process_mouse(event.rel[0], event.rel[1])
@@ -303,10 +376,14 @@ def main():
         if len(comet_points) > 220:
             comet_points.pop(0)
 
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-
         projection = glm.perspective(glm.radians(camera.fov), WIDTH / HEIGHT, 0.1, 2000.0)
         view = camera.view_matrix()
+
+        # ── 1. Render scene into HDR FBO ─────────────────────────────────────
+        glBindFramebuffer(GL_FRAMEBUFFER, hdr_fbo)
+        glViewport(0, 0, WIDTH, HEIGHT)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        glEnable(GL_DEPTH_TEST)
 
         glDepthMask(GL_FALSE)
         glUseProgram(star_program)
@@ -337,6 +414,7 @@ def main():
         set_mat4(asteroid_program, "uProjection", projection)
         set_vec3(asteroid_program, "uLightPos", glm.vec3(0.0, 0.0, 0.0))
         set_vec3(asteroid_program, "uViewPos", camera.position)
+        set_float(asteroid_program, "uTime", now)
         asteroid_belt.draw()
 
         glDepthMask(GL_FALSE)
@@ -345,7 +423,7 @@ def main():
         set_vec3(glow_program, "uCenter", glm.vec3(0.0, 0.0, 0.0))
         set_vec3(glow_program, "uCameraRight", camera.right)
         set_vec3(glow_program, "uCameraUp", camera.up)
-        set_float(glow_program, "uSize", 34.0)
+        set_float(glow_program, "uSize", 42.0)   # bigger glow for bloom pop
         set_mat4(glow_program, "uView", view)
         set_mat4(glow_program, "uProjection", projection)
         glow_quad.draw()
@@ -361,6 +439,7 @@ def main():
         set_vec3(planet_program, "uLightPos", glm.vec3(0.0, 0.0, 0.0))
         set_vec3(planet_program, "uViewPos", camera.position)
         set_float(planet_program, "uAmbientStrength", 0.08)
+        set_float(planet_program, "uTime", now)   # animated Sun
 
         sun.draw(sphere_mesh, planet_program)
         for planet in planets:
@@ -379,8 +458,73 @@ def main():
         glEnable(GL_CULL_FACE)
         glDepthMask(GL_TRUE)
 
+        # ── Earth atmospheric glow (rim lighting) ────────────────────────────
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE)
+        glDepthMask(GL_FALSE)
+        glDisable(GL_CULL_FACE)
+        glUseProgram(atmosphere_program)
+        set_mat4(atmosphere_program, "uView", view)
+        set_mat4(atmosphere_program, "uProjection", projection)
+        set_vec3(atmosphere_program, "uViewPos", camera.position)
+        # Slightly larger sphere around Earth
+        atm_model = earth.model_matrix()
+        atm_scale = glm.scale(glm.mat4(1.0), glm.vec3(1.12))
+        set_mat4(atmosphere_program, "uModel", atm_model * atm_scale)
+        set_vec3(atmosphere_program, "uAtmosphereColor", glm.vec3(0.2, 0.5, 1.0))
+        set_float(atmosphere_program, "uAtmosphereStrength", 0.85)
+        sphere_mesh.draw()
+        glEnable(GL_CULL_FACE)
+        glDepthMask(GL_TRUE)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+
+        # ── 2. Extract bright pixels (bloom source) ─────────────────────────
+        glBindFramebuffer(GL_FRAMEBUFFER, ping_pong_fbos[0])
+        glViewport(0, 0, WIDTH // 2, HEIGHT // 2)
+        glDisable(GL_DEPTH_TEST)
+        glClear(GL_COLOR_BUFFER_BIT)
+        glUseProgram(extract_program)
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, hdr_tex)
+        set_int(extract_program, "uScene", 0)
+        set_float(extract_program, "uThreshold", 0.72)
+        post_quad.draw()
+
+        # ── 3. Separable Gaussian blur (5 ping-pong passes) ─────────────────
+        glUseProgram(blur_program)
+        for i in range(5):
+            src, dst = i % 2, (i + 1) % 2
+            glBindFramebuffer(GL_FRAMEBUFFER, ping_pong_fbos[dst])
+            glClear(GL_COLOR_BUFFER_BIT)
+            glActiveTexture(GL_TEXTURE0)
+            glBindTexture(GL_TEXTURE_2D, ping_pong_texs[src])
+            set_int(blur_program, "uImage", 0)
+            set_int(blur_program, "uHorizontal", 1 if i % 2 == 0 else 0)
+            post_quad.draw()
+        bloom_tex = ping_pong_texs[5 % 2]
+
+        # ── 4. Composite: tone-map HDR + add bloom, render to screen ────────
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        glViewport(0, 0, WIDTH, HEIGHT)
+        glClear(GL_COLOR_BUFFER_BIT)
+        glDisable(GL_DEPTH_TEST)
+        glUseProgram(composite_program)
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, hdr_tex)
+        set_int(composite_program, "uScene", 0)
+        glActiveTexture(GL_TEXTURE1)
+        glBindTexture(GL_TEXTURE_2D, bloom_tex)
+        set_int(composite_program, "uBloom", 1)
+        set_float(composite_program, "uExposure", 1.05)
+        set_float(composite_program, "uBloomStrength", 1.2)
+        post_quad.draw()
+
+        # ── 5. UI overlay (after composite so it is not tone-mapped) ────────
         glDisable(GL_DEPTH_TEST)
         glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         if show_labels:
             label_bodies = [sun] + planets + [moon]
             for body in label_bodies:
@@ -390,9 +534,9 @@ def main():
                 color = (1.0, 0.86, 0.45, 1.0) if body.name == selected_planet.name else (0.74, 0.88, 1.0, 0.92)
                 text_renderer.draw(body.name, screen[0] + 7, screen[1] - 9, color, small=True)
         mode = "PRESENTATION" if presentation_mode else ("CINEMATIC" if cinematic_mode else ("FOLLOW" if follow_mode else "FREE"))
-        text_renderer.draw("ALL-TIME BEST SOLAR SYSTEM ENGINE", 16, 16, (1.0, 0.86, 0.36, 1.0))
-        text_renderer.draw(f"Mode: {mode} | Selected: {selected_planet.name} | Speed: {simulation_speed:.2f}x | FPS target: 60", 16, 40, (0.78, 0.92, 1.0, 0.95), small=True)
-        text_renderer.draw("TAB select | M mouse | F follow | C cinematic | P presentation | G principles | L labels | O orbits", 16, 60, (0.70, 0.82, 0.95, 0.86), small=True)
+        text_renderer.draw("ALL-TIME BEST SOLAR SYSTEM ENGINE  ◆  HDR BLOOM", 16, 16, (1.0, 0.86, 0.36, 1.0))
+        text_renderer.draw(f"Mode: {mode}  |  {selected_planet.name}  |  Speed: {simulation_speed:.2f}x  |  FPS: {current_fps:.0f}", 16, 40, (0.78, 0.92, 1.0, 0.95), small=True)
+        text_renderer.draw("1-8 planet jump | TAB cycle | M mouse | F follow | C cinematic | P present | F12 screenshot | ESC quit", 16, 60, (0.70, 0.82, 0.95, 0.86), small=True)
         draw_planet_panel(text_renderer, selected_planet, 16, HEIGHT - 124)
         if show_principles:
             draw_principles_panel(text_renderer, WIDTH - 430, 18)
@@ -403,11 +547,11 @@ def main():
 
         frame_counter += 1
         if now - fps_timer >= 0.35:
-            fps = frame_counter / (now - fps_timer)
+            current_fps = frame_counter / (now - fps_timer)
             frame_counter = 0
             fps_timer = now
             pygame.display.set_caption(
-                f"Advanced OpenGL Solar System | {fps:5.1f} FPS | {mode} | selected {selected_planet.name} | speed {simulation_speed:.2f}x"
+                f"Advanced OpenGL Solar System — HDR Bloom | {current_fps:5.1f} FPS | {mode} | {selected_planet.name} | speed {simulation_speed:.2f}x"
             )
 
     pygame.quit()
@@ -452,6 +596,9 @@ def draw_principles_panel(text_renderer, x, y):
         "6. Transparent blending: Saturn rings/clouds",
         "7. Instancing: 1400 asteroid draw calls -> 1",
         "8. Starfield point sprites + billboard glow",
+        "9. HDR FBO + 2-pass Gaussian Bloom",
+        "10. Atmospheric rim/Fresnel glow (Earth)",
+        "11. Animated Sun emissive + tumbling rocks",
     ]
     for i, line in enumerate(lines):
         color = (1.0, 0.86, 0.38, 1.0) if i == 0 else (0.72, 0.88, 1.0, 0.92)
