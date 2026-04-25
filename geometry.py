@@ -178,7 +178,14 @@ def create_starfield(count=2400, radius=1200.0):
         r = math.sqrt(max(0.0, 1.0 - z * z))
         pos = (r * math.cos(theta) * radius, z * radius, r * math.sin(theta) * radius)
         brightness = rng.uniform(0.35, 1.0)
-        data.extend([pos[0], pos[1], pos[2], brightness])
+        phase = rng.uniform(0.0, 2.0 * math.pi)
+        temperature = rng.uniform(0.0, 1.0)
+        color = (
+            np.interp(temperature, [0.0, 0.5, 1.0], [0.72, 1.0, 1.0]),
+            np.interp(temperature, [0.0, 0.5, 1.0], [0.80, 0.94, 0.78]),
+            np.interp(temperature, [0.0, 0.5, 1.0], [1.0, 0.92, 0.72]),
+        )
+        data.extend([pos[0], pos[1], pos[2], brightness, phase, color[0], color[1], color[2]])
 
     arr = np.asarray(data, dtype=np.float32)
     vao = glGenVertexArrays(1)
@@ -187,11 +194,15 @@ def create_starfield(count=2400, radius=1200.0):
     glBindBuffer(GL_ARRAY_BUFFER, vbo)
     glBufferData(GL_ARRAY_BUFFER, arr.nbytes, arr, GL_STATIC_DRAW)
 
-    stride = 4 * ctypes.sizeof(ctypes.c_float)
+    stride = 8 * ctypes.sizeof(ctypes.c_float)
     glEnableVertexAttribArray(0)
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(0))
     glEnableVertexAttribArray(1)
     glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(12))
+    glEnableVertexAttribArray(2)
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(16))
+    glEnableVertexAttribArray(3)
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(20))
     glBindVertexArray(0)
     return StarMesh(vao, vbo, count)
 

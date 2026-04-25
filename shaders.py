@@ -80,18 +80,24 @@ STAR_VERTEX_SHADER = """
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in float aBrightness;
+layout (location = 2) in float aPhase;
+layout (location = 3) in vec3 aColor;
 
 uniform mat4 uView;
 uniform mat4 uProjection;
+uniform float uTime;
 
 out float vBrightness;
+out vec3 vColor;
 
 void main()
 {
     mat4 viewNoTranslation = mat4(mat3(uView));
     gl_Position = uProjection * viewNoTranslation * vec4(aPos, 1.0);
-    gl_PointSize = 1.0 + aBrightness * 2.4;
-    vBrightness = aBrightness;
+    float twinkle = 0.78 + 0.22 * sin(uTime * (0.65 + aBrightness * 1.8) + aPhase);
+    gl_PointSize = 1.1 + aBrightness * 2.8 * twinkle;
+    vBrightness = aBrightness * twinkle;
+    vColor = aColor;
 }
 """
 
@@ -99,6 +105,7 @@ void main()
 STAR_FRAGMENT_SHADER = """
 #version 330 core
 in float vBrightness;
+in vec3 vColor;
 out vec4 FragColor;
 
 void main()
@@ -107,7 +114,9 @@ void main()
     float d = length(uv);
     if (d > 0.5) discard;
     float glow = smoothstep(0.5, 0.0, d);
-    FragColor = vec4(vec3(0.72, 0.82, 1.0) * vBrightness, glow);
+    float core = smoothstep(0.22, 0.0, d);
+    vec3 color = vColor * (0.65 + core * 0.55);
+    FragColor = vec4(color * vBrightness, glow);
 }
 """
 
@@ -370,12 +379,18 @@ uniform sampler2D uScene;
 uniform sampler2D uBloom;
 uniform float uExposure;
 uniform float uBloomStrength;
+uniform float uTime;
+uniform float uModePulse;
 out vec4 FragColor;
 void main() {
     const float gamma = 2.2;
     vec3 color = texture(uScene, vTexCoord).rgb;
     vec3 bloom  = texture(uBloom,  vTexCoord).rgb;
     color += bloom * uBloomStrength;
+    float vignette = smoothstep(1.2, 0.2, length(vTexCoord - vec2(0.5)));
+    float pulse = 1.0 + 0.03 * sin(uTime * 0.45) * uModePulse;
+    color *= mix(0.92, 1.04, vignette) * pulse;
+    color = mix(color, color * vec3(1.02, 0.99, 0.96), 0.18);
     // Reinhard tone mapping
     vec3 mapped = vec3(1.0) - exp(-color * uExposure);
     // Gamma correction

@@ -50,17 +50,7 @@ class Planet:
             child.update(dt, simulation_speed)
 
     def model_matrix(self):
-        local = glm.mat4(1.0)
-        local = glm.rotate(local, glm.radians(self.inclination), glm.vec3(0, 0, 1))
-        local = glm.rotate(local, self.orbit_angle, glm.vec3(0, 1, 0))
-        local = glm.translate(local, glm.vec3(self.orbit_radius, 0.0, 0.0))
-
-        if self.parent is not None:
-            orbital = self.parent.orbital_matrix() * local
-        else:
-            orbital = local
-
-        self.world_position = glm.vec3(orbital * glm.vec4(0, 0, 0, 1))
+        orbital = self.orbital_matrix()
         model = glm.rotate(orbital, self.rotation_angle, glm.vec3(0, 1, 0))
         model = glm.scale(model, glm.vec3(self.radius))
         return model
@@ -71,8 +61,15 @@ class Planet:
         local = glm.rotate(local, self.orbit_angle, glm.vec3(0, 1, 0))
         local = glm.translate(local, glm.vec3(self.orbit_radius, 0.0, 0.0))
         if self.parent is not None:
-            return self.parent.orbital_matrix() * local
-        return local
+            orbital = self.parent.orbital_matrix() * local
+        else:
+            orbital = local
+        self.world_position = glm.vec3(orbital * glm.vec4(0, 0, 0, 1))
+        return orbital
+
+    def current_position(self):
+        self.orbital_matrix()
+        return glm.vec3(self.world_position)
 
     def draw(self, mesh, shader_program):
         glActiveTexture(GL_TEXTURE0)

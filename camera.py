@@ -18,15 +18,29 @@ class Camera:
         self.speed = 95.0
         self.mouse_sensitivity = 0.11
         self.fov = 45.0
+        self.focus_target = self.position + self.front * 10.0
         self.update_vectors()
 
     def view_matrix(self):
         return glm.lookAt(self.position, self.position + self.front, self.up)
 
+    def snap_to(self, position, target):
+        self.position = glm.vec3(position)
+        self.focus_target = glm.vec3(target)
+        self.look_at(target)
+
+    def blend_to(self, position, target, dt, position_sharpness=5.5, target_sharpness=7.5):
+        pos_mix = 1.0 - math.exp(-position_sharpness * dt)
+        target_mix = 1.0 - math.exp(-target_sharpness * dt)
+        self.position = glm.mix(self.position, glm.vec3(position), pos_mix)
+        self.focus_target = glm.mix(self.focus_target, glm.vec3(target), target_mix)
+        self.look_at(self.focus_target)
+
     def look_at(self, target):
         direction = glm.normalize(target - self.position)
         self.pitch = math.degrees(math.asin(max(-1.0, min(1.0, direction.y))))
         self.yaw = math.degrees(math.atan2(direction.z, direction.x))
+        self.focus_target = glm.vec3(target)
         self.update_vectors()
 
     def process_keyboard(self, dt):
@@ -46,12 +60,14 @@ class Camera:
             self.position -= self.world_up * velocity
         if keys[pygame.K_e]:
             self.position += self.world_up * velocity
+        self.focus_target = self.position + self.front * 10.0
 
     def process_mouse(self, dx, dy):
         self.yaw += dx * self.mouse_sensitivity
         self.pitch -= dy * self.mouse_sensitivity
         self.pitch = max(-89.0, min(89.0, self.pitch))
         self.update_vectors()
+        self.focus_target = self.position + self.front * 10.0
 
     def process_scroll(self, y_offset):
         self.fov -= y_offset * 2.0

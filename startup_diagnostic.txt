@@ -1,0 +1,16 @@
+=== Solar System Startup Diagnostic ===
+Python: 3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
+Executable: C:\Python314\python.exe
+Platform: Windows-11-10.0.26200-SP0
+Working directory: C:\Users\dell\Desktop\CG Project\Computer-Graphic-Project
+
+Imports: OK
+pygame: 2.5.7
+numpy: 2.4.2
+PyGLM: 2.8.3
+Pillow: 12.2.0
+
+Assets: OK
+OpenGL context: 3.3.0 - Build 31.0.101.2130
+
+Diagnostic result: SUCCESS

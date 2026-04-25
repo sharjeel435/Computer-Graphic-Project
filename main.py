@@ -34,6 +34,7 @@ import math
 import glm
 import pygame
 from OpenGL.GL import *
+from PIL import Image
 
 from camera import Camera
 from geometry import create_asteroid_belt, create_dynamic_line_strip, create_orbit_line, create_ring, create_screen_quad, create_starfield, create_uv_sphere
@@ -83,6 +84,19 @@ PLANET_DATA = [
     ("Uranus", 3.9, 90.0, 0.012, 3.4, 0.8, "uranus.jpg", 32.0, 0.30),
     ("Neptune", 3.8, 108.0, 0.006, 3.5, 1.8, "neptune.jpg", 34.0, 0.34),
 ]
+
+TRAIL_COLORS = {
+    "Mercury": (0.92, 0.78, 0.56, 0.34),
+    "Venus": (0.95, 0.82, 0.45, 0.34),
+    "Earth": (0.38, 0.80, 1.0, 0.38),
+    "Moon": (0.82, 0.88, 1.0, 0.30),
+    "Mars": (1.0, 0.46, 0.28, 0.34),
+    "Jupiter": (0.98, 0.72, 0.48, 0.34),
+    "Saturn": (0.96, 0.84, 0.58, 0.34),
+    "Uranus": (0.56, 0.95, 0.98, 0.34),
+    "Neptune": (0.40, 0.62, 1.0, 0.34),
+    "Comet": (0.35, 0.90, 1.00, 0.50),
+}
 
 
 def require_assets():
@@ -213,6 +227,44 @@ def update_orbits(sun, planets, dt, simulation_speed):
         planet.update(dt, simulation_speed)
 
 
+def save_screenshot(path, width, height):
+    glPixelStorei(GL_PACK_ALIGNMENT, 1)
+    glReadBuffer(GL_BACK)
+    pixels = glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE)
+    image = Image.frombytes("RGBA", (width, height), pixels)
+    image = image.transpose(Image.FLIP_TOP_BOTTOM)
+    image.save(path)
+
+
+def update_trail(history, position, max_points):
+    history.append((position.x, position.y, position.z))
+    if len(history) > max_points:
+        history.pop(0)
+
+
+def selected_camera_pose(planet, now, mode):
+    target = planet.current_position()
+    radius = max(22.0, planet.radius * 12.0 + 10.0)
+    if mode == "presentation":
+        band = int(now * 0.42) % 3
+        if band == 0:
+            angle = now * 0.45
+            offset = glm.vec3(math.cos(angle) * radius, planet.radius * 4.0 + 8.0, math.sin(angle) * radius)
+        elif band == 1:
+            angle = now * 0.36
+            offset = glm.vec3(math.cos(angle) * radius * 0.52, planet.radius * 2.0 + 20.0, math.sin(angle) * radius * 1.15)
+        else:
+            drift = math.sin(now * 0.55) * 0.65
+            offset = glm.vec3(radius * 0.20, planet.radius * 1.7 + 4.0, radius * (1.4 + drift))
+        look_target = target + glm.vec3(0.0, planet.radius * 0.32, 0.0)
+        return target + offset, look_target
+
+    angle = now * 0.55
+    offset = glm.vec3(math.cos(angle) * radius * 0.72, planet.radius * 2.8 + 8.0, math.sin(angle) * radius)
+    look_target = target + glm.vec3(0.0, planet.radius * 0.18, 0.0)
+    return target + offset, look_target
+
+
 def main():
     require_assets()
     version = init_window()
@@ -273,18 +325,27 @@ def main():
     presentation_mode = False
     show_labels = True
     show_orbits = True
+    show_trails = True
     show_principles = True
     mouse_captured = False
     comet_points = []
+    trail_length = 160
+    body_trail_meshes = {}
+    trail_history = {}
+    for body in planets + [moon]:
+        body_trail_meshes[body.name] = create_dynamic_line_strip(max_points=trail_length)
+        trail_history[body.name] = []
+    camera.snap_to(camera.position, glm.vec3(0.0, 0.0, 0.0))
     last_time = time.perf_counter()
     frame_counter = 0
     fps_timer = time.perf_counter()
     current_fps = 60.0
     screenshot_counter = 0
+    pending_screenshot = None
 
     print(f"OpenGL: {version}", flush=True)
     print("Controls: WASD move, Q/E up/down, M mouse look, wheel FOV, +/- speed, SPACE pause", flush=True)
-    print("Keys 1-8 jump to planet | F12 screenshot | F follow | C cinematic | P presentation | ESC quit", flush=True)
+    print("Keys 1-8 jump | F follow | C cinematic | P presentation | T trails | O orbits | L labels | F12 screenshot | ESC quit", flush=True)
 
     while running:
         now = time.perf_counter()
@@ -317,6 +378,8 @@ def main():
                     show_labels = not show_labels
                 elif event.key == pygame.K_o:
                     show_orbits = not show_orbits
+                elif event.key == pygame.K_t:
+                    show_trails = not show_trails
                 elif event.key == pygame.K_g:
                     show_principles = not show_principles
                 elif event.key == pygame.K_m:
@@ -341,40 +404,43 @@ def main():
                 # F12: screenshot
                 elif event.key == pygame.K_F12:
                     screenshot_counter += 1
-                    fname = os.path.join(BASE_DIR, f"screenshot_{screenshot_counter:04d}.png")
-                    pygame.image.save(pygame.display.get_surface(), fname)
-                    print(f"[screenshot] saved {fname}", flush=True)
+                    pending_screenshot = os.path.join(BASE_DIR, f"screenshot_{screenshot_counter:04d}.png")
             elif event.type == pygame.MOUSEMOTION:
                 if mouse_captured:
                     camera.process_mouse(event.rel[0], event.rel[1])
             elif event.type == pygame.MOUSEWHEEL:
                 camera.process_scroll(event.y)
 
-        selected_planet = planets[selected_index]
-        if presentation_mode:
-            selected_index = int((now * 0.14) % len(planets))
-            selected_planet = planets[selected_index]
-            target = selected_planet.world_position
-            sweep = now * 0.28
-            distance = max(20.0, selected_planet.radius * 11.0)
-            camera.position = target + glm.vec3(math.cos(sweep) * distance, selected_planet.radius * 4.2 + 9.0, math.sin(sweep) * distance)
-            camera.look_at(target)
-        elif cinematic_mode:
-            orbit_t = now * 0.08
-            camera.position = glm.vec3(math.cos(orbit_t) * 155.0, 72.0 + math.sin(orbit_t * 0.7) * 20.0, math.sin(orbit_t) * 155.0)
-            camera.look_at(glm.vec3(0.0, 0.0, 0.0))
-        elif follow_mode:
-            target = selected_planet.world_position
-            camera.position = target + glm.vec3(0.0, selected_planet.radius * 5.0 + 8.0, selected_planet.radius * 12.0 + 18.0)
-            camera.look_at(target)
-        else:
-            camera.process_keyboard(dt)
         if not paused:
             update_orbits(sun, planets, dt, simulation_speed)
+
+        if presentation_mode:
+            selected_index = int((now * 0.14) % len(planets))
+        selected_planet = planets[selected_index]
+
+        tracked_bodies = planets + [moon]
+        for body in tracked_bodies:
+            update_trail(trail_history[body.name], body.current_position(), trail_length)
+
+        if presentation_mode:
+            desired_position, desired_target = selected_camera_pose(selected_planet, now, "presentation")
+            camera.blend_to(desired_position, desired_target, dt, position_sharpness=2.8, target_sharpness=3.6)
+        elif cinematic_mode:
+            orbit_t = now * 0.08
+            desired_position = glm.vec3(
+                math.cos(orbit_t) * 155.0,
+                72.0 + math.sin(orbit_t * 0.7) * 20.0,
+                math.sin(orbit_t) * 155.0,
+            )
+            camera.blend_to(desired_position, glm.vec3(0.0, 0.0, 0.0), dt, position_sharpness=2.1, target_sharpness=2.8)
+        elif follow_mode:
+            desired_position, desired_target = selected_camera_pose(selected_planet, now, "follow")
+            camera.blend_to(desired_position, desired_target, dt, position_sharpness=4.8, target_sharpness=6.2)
+        else:
+            camera.process_keyboard(dt)
+
         comet_pos = comet_position(now)
-        comet_points.append((comet_pos.x, comet_pos.y, comet_pos.z))
-        if len(comet_points) > 220:
-            comet_points.pop(0)
+        update_trail(comet_points, comet_pos, 220)
 
         projection = glm.perspective(glm.radians(camera.fov), WIDTH / HEIGHT, 0.1, 2000.0)
         view = camera.view_matrix()
@@ -389,6 +455,7 @@ def main():
         glUseProgram(star_program)
         set_mat4(star_program, "uView", view)
         set_mat4(star_program, "uProjection", projection)
+        set_float(star_program, "uTime", now)
         stars.draw()
         glDepthMask(GL_TRUE)
 
@@ -405,8 +472,19 @@ def main():
             set_vec4(line_program, "uColor", (0.70, 0.80, 1.00, 0.36))
             set_mat4(line_program, "uModel", earth.orbital_matrix())
             moon_orbit_line.draw()
-            set_vec4(line_program, "uColor", (0.35, 0.90, 1.00, 0.50))
+
+        if show_trails:
+            glUseProgram(line_program)
+            set_mat4(line_program, "uView", view)
+            set_mat4(line_program, "uProjection", projection)
             set_mat4(line_program, "uModel", glm.mat4(1.0))
+            for body in tracked_bodies:
+                color = TRAIL_COLORS.get(body.name, (0.72, 0.88, 1.0, 0.28))
+                if body.name == selected_planet.name:
+                    color = (min(color[0] + 0.16, 1.0), min(color[1] + 0.10, 1.0), min(color[2] + 0.10, 1.0), 0.55)
+                set_vec4(line_program, "uColor", color)
+                body_trail_meshes[body.name].update_and_draw(trail_history[body.name])
+            set_vec4(line_program, "uColor", TRAIL_COLORS["Comet"])
             comet_trail.update_and_draw(comet_points)
 
         glUseProgram(asteroid_program)
@@ -423,7 +501,7 @@ def main():
         set_vec3(glow_program, "uCenter", glm.vec3(0.0, 0.0, 0.0))
         set_vec3(glow_program, "uCameraRight", camera.right)
         set_vec3(glow_program, "uCameraUp", camera.up)
-        set_float(glow_program, "uSize", 42.0)   # bigger glow for bloom pop
+        set_float(glow_program, "uSize", 42.0)
         set_mat4(glow_program, "uView", view)
         set_mat4(glow_program, "uProjection", projection)
         glow_quad.draw()
@@ -519,6 +597,8 @@ def main():
         set_int(composite_program, "uBloom", 1)
         set_float(composite_program, "uExposure", 1.05)
         set_float(composite_program, "uBloomStrength", 1.2)
+        set_float(composite_program, "uTime", now)
+        set_float(composite_program, "uModePulse", 1.0 if (presentation_mode or cinematic_mode) else 0.35)
         post_quad.draw()
 
         # ── 5. UI overlay (after composite so it is not tone-mapped) ────────
@@ -534,13 +614,19 @@ def main():
                 color = (1.0, 0.86, 0.45, 1.0) if body.name == selected_planet.name else (0.74, 0.88, 1.0, 0.92)
                 text_renderer.draw(body.name, screen[0] + 7, screen[1] - 9, color, small=True)
         mode = "PRESENTATION" if presentation_mode else ("CINEMATIC" if cinematic_mode else ("FOLLOW" if follow_mode else "FREE"))
-        text_renderer.draw("ALL-TIME BEST SOLAR SYSTEM ENGINE  ◆  HDR BLOOM", 16, 16, (1.0, 0.86, 0.36, 1.0))
+        text_renderer.draw("NEXT-LEVEL SOLAR SYSTEM SHOWCASE", 16, 16, (1.0, 0.86, 0.36, 1.0))
         text_renderer.draw(f"Mode: {mode}  |  {selected_planet.name}  |  Speed: {simulation_speed:.2f}x  |  FPS: {current_fps:.0f}", 16, 40, (0.78, 0.92, 1.0, 0.95), small=True)
-        text_renderer.draw("1-8 planet jump | TAB cycle | M mouse | F follow | C cinematic | P present | F12 screenshot | ESC quit", 16, 60, (0.70, 0.82, 0.95, 0.86), small=True)
+        text_renderer.draw("Use the controls panel on the right for the full key guide.", 16, 60, (0.70, 0.82, 0.95, 0.86), small=True)
         draw_planet_panel(text_renderer, selected_planet, 16, HEIGHT - 124)
+        draw_controls_panel(text_renderer, WIDTH - 390, HEIGHT - 384)
         if show_principles:
             draw_principles_panel(text_renderer, WIDTH - 430, 18)
         glEnable(GL_DEPTH_TEST)
+
+        if pending_screenshot is not None:
+            save_screenshot(pending_screenshot, WIDTH, HEIGHT)
+            print(f"[screenshot] saved {pending_screenshot}", flush=True)
+            pending_screenshot = None
 
         pygame.display.flip()
         clock.tick(60)
@@ -578,6 +664,7 @@ def comet_position(t):
 
 
 def draw_planet_panel(text_renderer, planet, x, y):
+    draw_ui_panel(x - 10, y - 10, 380, 112, (0.03, 0.06, 0.10, 0.68), (0.16, 0.22, 0.30, 0.92))
     text_renderer.draw("SELECTED BODY", x, y, (1.0, 0.82, 0.36, 1.0), small=True)
     text_renderer.draw(f"{planet.name}", x, y + 20, (0.85, 0.95, 1.0, 1.0))
     text_renderer.draw(f"Orbit radius: {planet.orbit_radius:.1f} | Orbit speed: {planet.orbit_speed:.3f}", x, y + 46, (0.68, 0.84, 1.0, 0.95), small=True)
@@ -586,6 +673,7 @@ def draw_planet_panel(text_renderer, planet, x, y):
 
 
 def draw_principles_panel(text_renderer, x, y):
+    draw_ui_panel(x - 12, y - 12, 418, 246, (0.03, 0.06, 0.10, 0.68), (0.16, 0.22, 0.30, 0.92))
     lines = [
         "CG PRINCIPLES DEMONSTRATED",
         "1. VAO/VBO/EBO indexed UV spheres",
@@ -595,14 +683,45 @@ def draw_principles_panel(text_renderer, x, y):
         "5. Scene graph: Earth -> Moon -> Clouds",
         "6. Transparent blending: Saturn rings/clouds",
         "7. Instancing: 1400 asteroid draw calls -> 1",
-        "8. Starfield point sprites + billboard glow",
-        "9. HDR FBO + 2-pass Gaussian Bloom",
-        "10. Atmospheric rim/Fresnel glow (Earth)",
-        "11. Animated Sun emissive + tumbling rocks",
+        "8. Twinkling colored starfield + billboard glow",
+        "9. Dynamic orbital trails for planets + comet",
+        "10. HDR FBO + 2-pass Gaussian Bloom",
+        "11. Atmospheric rim/Fresnel glow (Earth)",
+        "12. Smooth cinematic camera direction",
     ]
     for i, line in enumerate(lines):
         color = (1.0, 0.86, 0.38, 1.0) if i == 0 else (0.72, 0.88, 1.0, 0.92)
         text_renderer.draw(line, x, y + i * 20, color, small=True)
+
+
+def draw_controls_panel(text_renderer, x, y):
+    lines = [
+        ("CONTROLS", (1.0, 0.86, 0.38, 1.0), False),
+        ("W A S D      move camera", (0.82, 0.93, 1.0, 0.96), True),
+        ("Q / E        move down / up", (0.82, 0.93, 1.0, 0.96), True),
+        ("M            toggle mouse-look", (0.82, 0.93, 1.0, 0.96), True),
+        ("Mouse Wheel  zoom FOV", (0.82, 0.93, 1.0, 0.96), True),
+        ("+ / -        change simulation speed", (0.82, 0.93, 1.0, 0.96), True),
+        ("Space        pause / resume", (0.82, 0.93, 1.0, 0.96), True),
+        ("Tab          cycle selected planet", (0.82, 0.93, 1.0, 0.96), True),
+        ("1-8          jump to a specific planet", (0.82, 0.93, 1.0, 0.96), True),
+        ("F            follow selected planet", (0.82, 0.93, 1.0, 0.96), True),
+        ("C            cinematic mode", (0.82, 0.93, 1.0, 0.96), True),
+        ("P            presentation mode", (0.82, 0.93, 1.0, 0.96), True),
+        ("T            toggle trails", (0.82, 0.93, 1.0, 0.96), True),
+        ("O            toggle orbits", (0.82, 0.93, 1.0, 0.96), True),
+        ("L            toggle labels", (0.82, 0.93, 1.0, 0.96), True),
+        ("G            toggle principles/info panel", (0.82, 0.93, 1.0, 0.96), True),
+        ("F12          take screenshot", (0.82, 0.93, 1.0, 0.96), True),
+        ("Esc          quit", (0.82, 0.93, 1.0, 0.96), True),
+    ]
+    draw_ui_panel(x - 12, y - 12, 350, 350, (0.03, 0.06, 0.10, 0.68), (0.16, 0.22, 0.30, 0.92))
+    for i, (line, color, small) in enumerate(lines):
+        text_renderer.draw(line, x, y + i * 19, color, small=small)
+
+
+def draw_ui_panel(x, y, width, height, fill_color, border_color):
+    return
 
 
 if __name__ == "__main__":
