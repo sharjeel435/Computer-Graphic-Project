@@ -36,12 +36,14 @@ in vec3 vNormal;
 in vec2 vTexCoord;
 
 uniform sampler2D uTexture;
+uniform sampler2D uNightTexture;
 uniform vec3 uLightPos;
 uniform vec3 uViewPos;
 uniform float uAmbientStrength;
 uniform float uSpecularStrength;
 uniform float uShininess;
 uniform int uEmissive;
+uniform int uHasNightTexture;
 uniform float uAlpha;
 uniform float uTime;
 
@@ -66,6 +68,12 @@ void main()
     vec3 lightDir = normalize(uLightPos - vFragPos);
     float diff = max(dot(norm, lightDir), 0.0);
     vec3 diffuse = diff * texColor;
+    if (uHasNightTexture == 1) {
+        vec3 cityLights = texture(uNightTexture, vTexCoord).rgb;
+        float nightMask = pow(1.0 - smoothstep(0.02, 0.42, diff), 1.35);
+        diffuse += cityLights * nightMask * 2.6;
+        ambient *= 0.45;
+    }
 
     vec3 viewDir = normalize(uViewPos - vFragPos);
     vec3 reflectDir = reflect(-lightDir, norm);

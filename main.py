@@ -65,7 +65,8 @@ from shaders import (
     set_vec3,
     set_vec4,
 )
-from texture import load_texture
+from systems import CometSystem
+from texture import ensure_city_lights_texture, load_texture
 from ui_text import TextRenderer
 
 
@@ -101,6 +102,7 @@ TRAIL_COLORS = {
 
 
 def require_assets():
+    ensure_city_lights_texture(os.path.join(ASSET_DIR, "earth_city_lights.png"))
     required = [
         "sun.jpg",
         "mercury.jpg",
@@ -114,6 +116,7 @@ def require_assets():
         "uranus.jpg",
         "neptune.jpg",
         "earth_clouds.png",
+        "earth_city_lights.png",
     ]
     missing = [name for name in required if not os.path.exists(os.path.join(ASSET_DIR, name))]
     if missing:
@@ -209,6 +212,7 @@ def create_scene(textures):
             shininess,
             specular,
             False,
+            night_texture_id=textures["earth_city_lights.png"] if name == "Earth" else None,
         )
         planets.append(planet)
         if name == "Earth":
@@ -222,10 +226,11 @@ def create_scene(textures):
     return sun, planets, moon, ring, clouds
 
 
-def update_orbits(sun, planets, dt, simulation_speed):
+def update_orbits(sun, planets, saturn_ring, dt, simulation_speed):
     sun.update(dt, simulation_speed)
     for planet in planets:
         planet.update(dt, simulation_speed)
+    saturn_ring.update(dt, simulation_speed)
 
 
 def save_screenshot(path, width, height):
@@ -377,7 +382,8 @@ def body_destroy_offset(body, amount, now):
 
 def body_destroy_scale(body, amount, now):
     if body.name == "Sun":
-        return 1.0 + smoothstep01(amount) * (0.28 + 0.08 * math.sin(now * 8.0))
+        pulse = 0.06 * math.sin(now * 12.0) * smoothstep01(amount)
+        return max(0.16, 1.0 - smoothstep01(amount) * 0.86 + pulse)
     return max(0.08, 1.0 - smoothstep01(amount) * 0.82)
 
 
@@ -389,18 +395,25 @@ def fragment_direction(seed):
 
 
 def draw_body_fragments(body, mesh, shader_program, amount, now):
-    if amount <= 0.02 or body.name == "Sun":
+    if amount <= 0.02:
         return
     eased = smoothstep01(amount)
     base = body.current_position()
     name_seed = sum((i + 1) * ord(ch) for i, ch in enumerate(body.name))
-    fragment_count = 12 if body.radius < 3.0 else 18
+    if body.name == "Sun":
+        fragment_count = 34
+    else:
+        fragment_count = 12 if body.radius < 3.0 else 18
 
     for i in range(fragment_count):
         seed = name_seed + i * 19
         direction = fragment_direction(seed)
         surface = direction * body.radius * (0.35 + (i % 4) * 0.18)
-        burst = direction * (body.radius * 8.0 + body.orbit_radius * 0.34 + (i % 5) * 3.2) * eased
+        if body.name == "Sun":
+            burst_distance = body.radius * (14.0 + (i % 7) * 1.25)
+        else:
+            burst_distance = body.radius * 8.0 + body.orbit_radius * 0.34 + (i % 5) * 3.2
+        burst = direction * burst_distance * eased
         spin_axis = fragment_direction(seed + 11)
         wobble = glm.vec3(
             math.sin(now * 2.1 + seed) * 0.6,
@@ -408,7 +421,8 @@ def draw_body_fragments(body, mesh, shader_program, amount, now):
             math.sin(now * 1.4 + seed * 0.7) * 0.6,
         ) * eased
         position = base + surface * (1.0 - eased * 0.35) + burst + wobble
-        size = body.radius * (0.13 + (seed % 7) * 0.018) * (0.65 + eased * 0.35)
+        size_base = 0.18 if body.name == "Sun" else 0.13
+        size = body.radius * (size_base + (seed % 7) * 0.018) * (0.65 + eased * 0.35)
         model = glm.mat4(1.0)
         model = glm.translate(model, position)
         model = glm.rotate(model, now * (1.7 + (seed % 9) * 0.22) + seed, spin_axis)
@@ -417,9 +431,12 @@ def draw_body_fragments(body, mesh, shader_program, amount, now):
 
 
 def main():
+    print("[startup] verifying assets...", flush=True)
     require_assets()
+    print("[startup] creating OpenGL window...", flush=True)
     version = init_window()
 
+    print("[startup] compiling shaders...", flush=True)
     planet_program = create_program(PLANET_VERTEX_SHADER, PLANET_FRAGMENT_SHADER)
     star_program = create_program(STAR_VERTEX_SHADER, STAR_FRAGMENT_SHADER)
     line_program = create_program(LINE_VERTEX_SHADER, LINE_FRAGMENT_SHADER)
@@ -430,6 +447,7 @@ def main():
     extract_program = create_program(POST_VERTEX_SHADER, BRIGHTNESS_EXTRACT_FRAG)
     blur_program = create_program(POST_VERTEX_SHADER, BLUR_FRAG)
     composite_program = create_program(POST_VERTEX_SHADER, COMPOSITE_FRAG)
+    print("[startup] uploading meshes...", flush=True)
     sphere_mesh = create_uv_sphere(stacks=48, slices=96)
     fragment_mesh = create_uv_sphere(stacks=8, slices=14)
     ring_mesh = create_ring()
@@ -437,6 +455,7 @@ def main():
     post_quad = create_screen_quad()
     stars = create_starfield(count=2400, radius=1200.0)
     asteroid_belt = create_asteroid_belt(count=1400)
+    comet_system = CometSystem(stream_count=9, tail_segments=22)
     comet_trail = create_dynamic_line_strip(max_points=220)
     orbit_lines = []
     for name, _radius, orbit_radius, _orbit_speed, _rotation_speed, inclination, *_rest in PLANET_DATA:
@@ -455,9 +474,16 @@ def main():
         "uranus.jpg",
         "neptune.jpg",
         "earth_clouds.png",
+        "earth_city_lights.png",
     ]
-    textures = {name: load_texture(os.path.join(ASSET_DIR, name)) for name in texture_names}
+    print("[startup] loading textures...", flush=True)
+    textures = {}
+    for name in texture_names:
+        print(f"[startup] texture {name}", flush=True)
+        textures[name] = load_texture(os.path.join(ASSET_DIR, name))
+    print("[startup] building scene graph...", flush=True)
     sun, planets, moon, saturn_ring, earth_clouds = create_scene(textures)
+    comet_body = Planet("Comet", 0.72, 0.0, 0.0, 1.8, 0.0, textures["moon.jpg"], 20.0, 0.24, False)
     earth = next(planet for planet in planets if planet.name == "Earth")
     moon_orbit_line = create_orbit_line(moon.orbit_radius, moon.inclination, segments=96)
     text_renderer = TextRenderer(text_program, WIDTH, HEIGHT)
@@ -481,6 +507,8 @@ def main():
     show_orbits = True
     show_trails = True
     show_principles = True
+    show_comets = True
+    show_asteroids = True
     destruction_level = 0.0
     destruction_target = 0.0
     shockwave_start = -10.0
@@ -507,7 +535,7 @@ def main():
     print(f"OpenGL: {version}", flush=True)
     print("Startup: 16-second cinematic intro, then free exploration.", flush=True)
     print("Controls: WASD move, Q/E up/down, M mouse look, wheel FOV, +/- speed, SPACE pause", flush=True)
-    print("Keys 1-8 jump | F follow | C cinematic | P presentation | B shatter/restore | T add/remove trails | O orbits | L labels | F12 screenshot | ESC quit", flush=True)
+    print("Keys 1-8 jump | F follow | C cinematic | P presentation | B shatter/restore | T trails | V comet | X asteroids | O orbits | L labels | F12 screenshot | ESC quit", flush=True)
 
     while running:
         now = time.perf_counter()
@@ -548,6 +576,10 @@ def main():
                     show_orbits = not show_orbits
                 elif event.key == pygame.K_t:
                     show_trails = not show_trails
+                elif event.key == pygame.K_v:
+                    show_comets = not show_comets
+                elif event.key == pygame.K_x:
+                    show_asteroids = not show_asteroids
                 elif event.key == pygame.K_b:
                     intro_cinematic_active = False
                     cinematic_mode = False
@@ -603,7 +635,9 @@ def main():
             camera.fov = 45.0
 
         if not paused:
-            update_orbits(sun, planets, dt, simulation_speed)
+            update_orbits(sun, planets, saturn_ring, dt, simulation_speed)
+            comet_system.update(dt, simulation_speed)
+            comet_body.rotation_angle += comet_body.rotation_speed * simulation_speed * dt
         destruction_level = destruction_amount(destruction_level, destruction_target, dt)
 
         if presentation_mode:
@@ -634,8 +668,10 @@ def main():
         else:
             camera.process_keyboard(dt)
 
-        comet_pos = comet_position(now)
-        update_trail(comet_points, comet_pos, 220)
+        comet_pos = comet_system.position
+        comet_body.world_position = comet_pos
+        if show_comets:
+            update_trail(comet_points, comet_pos, 220)
 
         shock_amount, shock_radius = shockwave_values(now, shockwave_start, shockwave_strength)
         projection = glm.perspective(glm.radians(camera.fov), WIDTH / HEIGHT, 0.1, 2000.0)
@@ -684,16 +720,26 @@ def main():
                     color = (min(color[0] + 0.16, 1.0), min(color[1] + 0.10, 1.0), min(color[2] + 0.10, 1.0), 0.55)
                 set_vec4(line_program, "uColor", color)
                 body_trail_meshes[body.name].update_and_draw(trail_history[body.name])
-            set_vec4(line_program, "uColor", TRAIL_COLORS["Comet"])
-            comet_trail.update_and_draw(comet_points)
+            if show_comets:
+                set_vec4(line_program, "uColor", TRAIL_COLORS["Comet"])
+                comet_trail.update_and_draw(comet_points)
 
-        glUseProgram(asteroid_program)
-        set_mat4(asteroid_program, "uView", view)
-        set_mat4(asteroid_program, "uProjection", projection)
-        set_vec3(asteroid_program, "uLightPos", glm.vec3(0.0, 0.0, 0.0))
-        set_vec3(asteroid_program, "uViewPos", camera.position)
-        set_float(asteroid_program, "uTime", now)
-        asteroid_belt.draw()
+        if show_comets:
+            glUseProgram(line_program)
+            set_mat4(line_program, "uView", view)
+            set_mat4(line_program, "uProjection", projection)
+            set_mat4(line_program, "uModel", glm.mat4(1.0))
+            glEnable(GL_BLEND)
+            comet_system.draw_tail(line_program, now)
+
+        if show_asteroids:
+            glUseProgram(asteroid_program)
+            set_mat4(asteroid_program, "uView", view)
+            set_mat4(asteroid_program, "uProjection", projection)
+            set_vec3(asteroid_program, "uLightPos", glm.vec3(0.0, 0.0, 0.0))
+            set_vec3(asteroid_program, "uViewPos", camera.position)
+            set_float(asteroid_program, "uTime", now)
+            asteroid_belt.draw()
 
         glDepthMask(GL_FALSE)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE)
@@ -705,9 +751,10 @@ def main():
         set_mat4(glow_program, "uView", view)
         set_mat4(glow_program, "uProjection", projection)
         glow_quad.draw()
-        set_vec3(glow_program, "uCenter", comet_pos)
-        set_float(glow_program, "uSize", 3.2)
-        glow_quad.draw()
+        if show_comets:
+            set_vec3(glow_program, "uCenter", comet_pos)
+            set_float(glow_program, "uSize", 3.2)
+            glow_quad.draw()
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         glDepthMask(GL_TRUE)
 
@@ -720,6 +767,7 @@ def main():
         set_float(planet_program, "uTime", now)   # animated Sun
 
         sun.draw(sphere_mesh, planet_program, scale_multiplier=body_destroy_scale(sun, destruction_level, now))
+        draw_body_fragments(sun, fragment_mesh, planet_program, destruction_level, now)
         for planet in planets:
             planet.draw(
                 sphere_mesh,
@@ -735,6 +783,12 @@ def main():
             body_destroy_scale(moon, destruction_level, now),
         )
         draw_body_fragments(moon, fragment_mesh, planet_program, destruction_level, now)
+        if show_comets:
+            comet_model = glm.mat4(1.0)
+            comet_model = glm.translate(comet_model, comet_pos)
+            comet_model = glm.rotate(comet_model, comet_body.rotation_angle, glm.vec3(0.0, 1.0, 0.0))
+            comet_model = glm.scale(comet_model, glm.vec3(comet_body.radius))
+            comet_body.draw_with_model(sphere_mesh, planet_program, comet_model)
 
         glEnable(GL_BLEND)
         glDepthMask(GL_FALSE)
@@ -828,7 +882,7 @@ def main():
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         if show_labels and not intro_cinematic_active:
-            label_bodies = [sun] + planets + [moon]
+            label_bodies = [sun] + planets + [moon] + ([comet_body] if show_comets else [])
             for body in label_bodies:
                 screen = project_to_screen(body.world_position + body_destroy_offset(body, destruction_level, now), view, projection)
                 if screen is None:
@@ -851,12 +905,14 @@ def main():
         text_renderer.draw("Sharjeel", 16, 40, (1.0, 0.86, 0.45, 1.0))
         text_renderer.draw("Suhaib", 16, 64, (1.0, 0.86, 0.45, 1.0))
         trail_status = "ON" if show_trails else "OFF"
-        text_renderer.draw(f"Mode: {mode}  |  {selected_planet.name}  |  Speed: {simulation_speed:.2f}x  |  Trails: {trail_status}  |  FPS: {current_fps:.0f}", 16, 88, (0.78, 0.92, 1.0, 0.95), small=True)
+        comet_status = "ON" if show_comets else "OFF"
+        asteroid_status = "ON" if show_asteroids else "OFF"
+        text_renderer.draw(f"Mode: {mode}  |  {selected_planet.name}  |  Speed: {simulation_speed:.2f}x  |  Trails: {trail_status}  |  Comet: {comet_status}  |  Asteroids: {asteroid_status}  |  FPS: {current_fps:.0f}", 16, 88, (0.78, 0.92, 1.0, 0.95), small=True)
         if intro_cinematic_active:
             seconds_left = max(0.0, intro_cinematic_end - now)
             intro_elapsed = intro_cinematic_duration - seconds_left
             text_renderer.draw(intro_caption(intro_elapsed), 16, HEIGHT - 86, (1.0, 0.86, 0.36, 1.0))
-            text_renderer.draw(f"Free exploration begins in {seconds_left:04.1f}s  |  Press WASD to control  |  T add/remove trails", 16, HEIGHT - 56, (0.78, 0.92, 1.0, 0.92), small=True)
+            text_renderer.draw(f"Free exploration begins in {seconds_left:04.1f}s  |  Press WASD to control  |  T trails | V comet | X asteroids", 16, HEIGHT - 56, (0.78, 0.92, 1.0, 0.92), small=True)
         elif destruction_level > 0.05:
             action = "Fragments restoring into orbit" if destruction_target < 0.5 else "Planets shattering into fragments"
             text_renderer.draw(f"{action}  |  Press B to {'shatter again' if destruction_target < 0.5 else 'restore'}", 16, 108, (1.0, 0.42, 0.30, 0.98), small=True)
@@ -926,11 +982,11 @@ def draw_principles_panel(text_renderer, x, y):
         "2. GLSL 330 vertex + fragment shaders",
         "3. Model-View-Projection matrix pipeline",
         "4. Phong lighting from emissive Sun",
-        "5. Scene graph: Earth -> Moon -> Clouds",
-        "6. Transparent blending: Saturn rings/clouds",
+        "5. Earth night emission texture on dark side",
+        "6. Scene graph: Earth -> Moon -> Clouds",
         "7. Instancing: 1400 asteroid draw calls -> 1",
-        "8. Twinkling colored starfield + billboard glow",
-        "9. Dynamic orbital trails for planets + comet",
+        "8. Rotating transparent Saturn ring geometry",
+        "9. Comet ellipse + anti-solar procedural tail",
         "10. HDR FBO + 2-pass Gaussian Bloom",
         "11. Atmospheric rim/Fresnel glow (Earth)",
         "12. Smooth cinematic camera direction",
@@ -956,13 +1012,15 @@ def draw_controls_panel(text_renderer, x, y):
         ("P            presentation mode", (0.82, 0.93, 1.0, 0.96), True),
         ("B            shockwave shatter / restore", (1.0, 0.72, 0.55, 0.98), True),
         ("T            add / remove trails", (0.82, 0.93, 1.0, 0.96), True),
+        ("V            enable / disable comet", (0.82, 0.93, 1.0, 0.96), True),
+        ("X            enable / disable asteroids", (0.82, 0.93, 1.0, 0.96), True),
         ("O            toggle orbits", (0.82, 0.93, 1.0, 0.96), True),
         ("L            toggle labels", (0.82, 0.93, 1.0, 0.96), True),
         ("G            toggle principles/info panel", (0.82, 0.93, 1.0, 0.96), True),
         ("F12          take screenshot", (0.82, 0.93, 1.0, 0.96), True),
         ("Esc          quit", (0.82, 0.93, 1.0, 0.96), True),
     ]
-    draw_ui_panel(x - 12, y - 12, 350, 370, (0.03, 0.06, 0.10, 0.68), (0.16, 0.22, 0.30, 0.92))
+    draw_ui_panel(x - 12, y - 12, 350, 408, (0.03, 0.06, 0.10, 0.68), (0.16, 0.22, 0.30, 0.92))
     for i, (line, color, small) in enumerate(lines):
         text_renderer.draw(line, x, y + i * 19, color, small=small)
 

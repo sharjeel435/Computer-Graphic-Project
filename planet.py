@@ -23,6 +23,7 @@ class Planet:
         emissive=False,
         parent=None,
         alpha=1.0,
+        night_texture_id=None,
     ):
         self.name = name
         self.radius = radius
@@ -36,6 +37,7 @@ class Planet:
         self.emissive = emissive
         self.parent = parent
         self.alpha = alpha
+        self.night_texture_id = night_texture_id
         self.children = []
         self.orbit_angle = 0.0
         self.rotation_angle = 0.0
@@ -77,6 +79,14 @@ class Planet:
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, self.texture_id)
         set_int(shader_program, "uTexture", 0)
+        if self.night_texture_id is not None:
+            glActiveTexture(GL_TEXTURE1)
+            glBindTexture(GL_TEXTURE_2D, self.night_texture_id)
+            set_int(shader_program, "uNightTexture", 1)
+            set_int(shader_program, "uHasNightTexture", 1)
+            glActiveTexture(GL_TEXTURE0)
+        else:
+            set_int(shader_program, "uHasNightTexture", 0)
         set_float(shader_program, "uSpecularStrength", self.specular)
         set_float(shader_program, "uShininess", self.shininess)
         set_int(shader_program, "uEmissive", 1 if self.emissive else 0)
@@ -88,6 +98,7 @@ class Planet:
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, self.texture_id)
         set_int(shader_program, "uTexture", 0)
+        set_int(shader_program, "uHasNightTexture", 0)
         set_float(shader_program, "uSpecularStrength", self.specular)
         set_float(shader_program, "uShininess", self.shininess)
         set_int(shader_program, "uEmissive", 1 if self.emissive else 0)
@@ -100,12 +111,17 @@ class SaturnRing:
     def __init__(self, saturn, texture_id):
         self.saturn = saturn
         self.texture_id = texture_id
+        self.rotation_angle = 0.0
+
+    def update(self, dt, simulation_speed):
+        self.rotation_angle += 0.16 * simulation_speed * dt
 
     def model_matrix(self, world_offset=None):
         model = self.saturn.orbital_matrix()
         if world_offset is not None:
             model = glm.translate(glm.mat4(1.0), glm.vec3(world_offset)) * model
         model = glm.rotate(model, glm.radians(26.7), glm.vec3(0, 0, 1))
+        model = glm.rotate(model, self.rotation_angle, glm.vec3(0, 1, 0))
         model = glm.scale(model, glm.vec3(self.saturn.radius))
         return model
 
@@ -113,6 +129,7 @@ class SaturnRing:
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, self.texture_id)
         set_int(shader_program, "uTexture", 0)
+        set_int(shader_program, "uHasNightTexture", 0)
         set_float(shader_program, "uSpecularStrength", 0.18)
         set_float(shader_program, "uShininess", 12.0)
         set_int(shader_program, "uEmissive", 0)
