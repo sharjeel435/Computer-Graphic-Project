@@ -72,6 +72,7 @@ from ui_text import TextRenderer
 WIDTH, HEIGHT = 1400, 900
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSET_DIR = os.path.join(BASE_DIR, "assets")
+APP_TITLE = "Computer Graphics Solar System"
 
 
 PLANET_DATA = [
@@ -132,7 +133,7 @@ def init_window():
     pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
     pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
     pygame.display.set_mode((WIDTH, HEIGHT), pygame.OPENGL | pygame.DOUBLEBUF | pygame.SHOWN)
-    pygame.display.set_caption("Advanced OpenGL 3.3 Solar System — HDR Bloom")
+    pygame.display.set_caption(f"{APP_TITLE} - HDR Bloom")
     pygame.event.set_grab(False)
     pygame.mouse.set_visible(True)
 
@@ -265,6 +266,156 @@ def selected_camera_pose(planet, now, mode):
     return target + offset, look_target
 
 
+def smoothstep01(value):
+    t = max(0.0, min(1.0, value))
+    return t * t * (3.0 - 2.0 * t)
+
+
+def lerp_float(start, end, t):
+    return start + (end - start) * t
+
+
+def cinematic_camera_pose(now):
+    orbit_t = now * 0.08
+    desired_position = glm.vec3(
+        math.cos(orbit_t) * 155.0,
+        104.0 + math.sin(orbit_t * 0.7) * 18.0,
+        math.sin(orbit_t) * 155.0,
+    )
+    return desired_position, glm.vec3(0.0, -4.0, 0.0)
+
+
+def intro_camera_pose(elapsed, now, planets):
+    earth = next(planet for planet in planets if planet.name == "Earth")
+    saturn = next(planet for planet in planets if planet.name == "Saturn")
+    earth_pos = earth.current_position()
+    saturn_pos = saturn.current_position()
+
+    if elapsed < 4.2:
+        t = smoothstep01(elapsed / 4.2)
+        position = glm.mix(glm.vec3(-270.0, 240.0, 460.0), glm.vec3(158.0, 154.0, 260.0), t)
+        target = glm.mix(glm.vec3(0.0, 4.0, 0.0), glm.vec3(0.0, -5.0, 0.0), t)
+        fov = lerp_float(62.0, 50.0, t)
+        return position, target, fov
+
+    if elapsed < 8.2:
+        t = smoothstep01((elapsed - 4.2) / 4.0)
+        angle = now * 0.28 + math.pi * 0.15
+        start = glm.vec3(158.0, 154.0, 260.0)
+        end = glm.vec3(math.cos(angle) * 78.0, 54.0 + math.sin(angle * 1.3) * 8.0, math.sin(angle) * 78.0)
+        position = glm.mix(start, end, t)
+        target = glm.mix(glm.vec3(0.0, -5.0, 0.0), earth_pos * 0.22 + glm.vec3(0.0, -2.0, 0.0), t)
+        fov = lerp_float(50.0, 45.0, t)
+        return position, target, fov
+
+    if elapsed < 11.8:
+        t = smoothstep01((elapsed - 8.2) / 3.6)
+        orbit = now * 0.42
+        offset = glm.vec3(math.cos(orbit) * 30.0, 20.0 + math.sin(orbit * 0.8) * 3.5, math.sin(orbit) * 34.0)
+        position = glm.mix(glm.vec3(math.cos(now * 0.28) * 78.0, 54.0, math.sin(now * 0.28) * 78.0), earth_pos + offset, t)
+        target = glm.mix(earth_pos * 0.22 + glm.vec3(0.0, -2.0, 0.0), earth_pos + glm.vec3(0.0, 0.2, 0.0), t)
+        fov = lerp_float(45.0, 38.0, t)
+        return position, target, fov
+
+    t = smoothstep01((elapsed - 11.8) / 4.2)
+    angle = now * 0.32
+    earth_offset = glm.vec3(math.cos(now * 0.42) * 30.0, 20.0, math.sin(now * 0.42) * 34.0)
+    saturn_offset = glm.vec3(math.cos(angle) * 92.0, 64.0 + math.sin(angle * 0.9) * 6.0, math.sin(angle) * 104.0)
+    position = glm.mix(earth_pos + earth_offset, saturn_pos + saturn_offset, t)
+    target = glm.mix(earth_pos + glm.vec3(0.0, 0.2, 0.0), saturn_pos + glm.vec3(0.0, -1.0, 0.0), t)
+    fov = lerp_float(38.0, 53.0, t)
+    return position, target, fov
+
+
+def intro_caption(elapsed):
+    if elapsed < 4.2:
+        return "SOLAR SYSTEM REVEAL"
+    if elapsed < 8.2:
+        return "SUN FLYBY"
+    if elapsed < 11.8:
+        return "EARTH AND MOON"
+    return "SATURN RING PASS"
+
+
+def destruction_amount(current, target, dt):
+    blend = 1.0 - math.exp(-2.4 * dt)
+    return lerp_float(current, target, blend)
+
+
+def shockwave_values(now, start_time, strength):
+    age = now - start_time
+    if age < 0.0 or age > 1.35:
+        return 0.0, 0.0
+    amount = smoothstep01(1.0 - age / 1.35) * strength
+    radius = 0.05 + age * 0.78
+    return amount, radius
+
+
+def camera_shake_offset(now, amount):
+    if amount <= 0.001:
+        return glm.vec3(0.0)
+    return (
+        camera_shake_axis(now * 39.0, 1.0) * math.sin(now * 62.0)
+        + camera_shake_axis(now * 31.0, 2.0) * math.cos(now * 47.0)
+    ) * (amount * 2.1)
+
+
+def camera_shake_axis(value, phase):
+    return glm.normalize(glm.vec3(math.sin(value + phase), math.cos(value * 0.77 + phase), math.sin(value * 0.43 + phase)))
+
+
+def body_destroy_offset(body, amount, now):
+    if amount <= 0.001 or body.name == "Sun":
+        return glm.vec3(0.0)
+    eased = smoothstep01(amount)
+    seed = sum((i + 1) * ord(ch) for i, ch in enumerate(body.name))
+    angle = seed * 0.173
+    distance = (body.orbit_radius * 2.6 + body.radius * 18.0 + 44.0) * eased
+    lift = ((seed % 5) - 2) * 10.0 * eased + math.sin(now * 1.8 + seed) * 7.0 * eased
+    return glm.vec3(math.cos(angle) * distance, lift, math.sin(angle) * distance)
+
+
+def body_destroy_scale(body, amount, now):
+    if body.name == "Sun":
+        return 1.0 + smoothstep01(amount) * (0.28 + 0.08 * math.sin(now * 8.0))
+    return max(0.08, 1.0 - smoothstep01(amount) * 0.82)
+
+
+def fragment_direction(seed):
+    angle = seed * 1.618
+    y = ((seed * 37) % 100) / 50.0 - 1.0
+    radius = math.sqrt(max(0.0, 1.0 - y * y))
+    return glm.normalize(glm.vec3(math.cos(angle) * radius, y, math.sin(angle) * radius))
+
+
+def draw_body_fragments(body, mesh, shader_program, amount, now):
+    if amount <= 0.02 or body.name == "Sun":
+        return
+    eased = smoothstep01(amount)
+    base = body.current_position()
+    name_seed = sum((i + 1) * ord(ch) for i, ch in enumerate(body.name))
+    fragment_count = 12 if body.radius < 3.0 else 18
+
+    for i in range(fragment_count):
+        seed = name_seed + i * 19
+        direction = fragment_direction(seed)
+        surface = direction * body.radius * (0.35 + (i % 4) * 0.18)
+        burst = direction * (body.radius * 8.0 + body.orbit_radius * 0.34 + (i % 5) * 3.2) * eased
+        spin_axis = fragment_direction(seed + 11)
+        wobble = glm.vec3(
+            math.sin(now * 2.1 + seed) * 0.6,
+            math.cos(now * 1.7 + seed) * 0.45,
+            math.sin(now * 1.4 + seed * 0.7) * 0.6,
+        ) * eased
+        position = base + surface * (1.0 - eased * 0.35) + burst + wobble
+        size = body.radius * (0.13 + (seed % 7) * 0.018) * (0.65 + eased * 0.35)
+        model = glm.mat4(1.0)
+        model = glm.translate(model, position)
+        model = glm.rotate(model, now * (1.7 + (seed % 9) * 0.22) + seed, spin_axis)
+        model = glm.scale(model, glm.vec3(size, size * (0.65 + (seed % 5) * 0.12), size * (0.72 + (seed % 3) * 0.16)))
+        body.draw_with_model(mesh, shader_program, model)
+
+
 def main():
     require_assets()
     version = init_window()
@@ -280,6 +431,7 @@ def main():
     blur_program = create_program(POST_VERTEX_SHADER, BLUR_FRAG)
     composite_program = create_program(POST_VERTEX_SHADER, COMPOSITE_FRAG)
     sphere_mesh = create_uv_sphere(stacks=48, slices=96)
+    fragment_mesh = create_uv_sphere(stacks=8, slices=14)
     ring_mesh = create_ring()
     glow_quad = create_screen_quad()
     post_quad = create_screen_quad()
@@ -321,12 +473,18 @@ def main():
     simulation_speed = 0.62
     selected_index = 2
     follow_mode = False
-    cinematic_mode = False
+    cinematic_mode = True
     presentation_mode = False
+    intro_cinematic_duration = 16.0
+    intro_cinematic_active = True
     show_labels = True
     show_orbits = True
     show_trails = True
     show_principles = True
+    destruction_level = 0.0
+    destruction_target = 0.0
+    shockwave_start = -10.0
+    shockwave_strength = 0.0
     mouse_captured = False
     comet_points = []
     trail_length = 160
@@ -335,8 +493,11 @@ def main():
     for body in planets + [moon]:
         body_trail_meshes[body.name] = create_dynamic_line_strip(max_points=trail_length)
         trail_history[body.name] = []
-    camera.snap_to(camera.position, glm.vec3(0.0, 0.0, 0.0))
     last_time = time.perf_counter()
+    intro_cinematic_end = last_time + intro_cinematic_duration
+    start_position, start_target, start_fov = intro_camera_pose(0.0, last_time, planets)
+    camera.snap_to(start_position, start_target)
+    camera.fov = start_fov
     frame_counter = 0
     fps_timer = time.perf_counter()
     current_fps = 60.0
@@ -344,8 +505,9 @@ def main():
     pending_screenshot = None
 
     print(f"OpenGL: {version}", flush=True)
+    print("Startup: 16-second cinematic intro, then free exploration.", flush=True)
     print("Controls: WASD move, Q/E up/down, M mouse look, wheel FOV, +/- speed, SPACE pause", flush=True)
-    print("Keys 1-8 jump | F follow | C cinematic | P presentation | T trails | O orbits | L labels | F12 screenshot | ESC quit", flush=True)
+    print("Keys 1-8 jump | F follow | C cinematic | P presentation | B shatter/restore | T add/remove trails | O orbits | L labels | F12 screenshot | ESC quit", flush=True)
 
     while running:
         now = time.perf_counter()
@@ -362,15 +524,21 @@ def main():
                 elif event.key == pygame.K_SPACE:
                     paused = not paused
                 elif event.key == pygame.K_TAB:
+                    intro_cinematic_active = False
+                    cinematic_mode = False
                     selected_index = (selected_index + 1) % len(planets)
                 elif event.key == pygame.K_f:
+                    intro_cinematic_active = False
                     follow_mode = not follow_mode
                     cinematic_mode = False
                 elif event.key == pygame.K_c:
-                    cinematic_mode = not cinematic_mode
+                    was_intro = intro_cinematic_active
+                    intro_cinematic_active = False
+                    cinematic_mode = True if was_intro else not cinematic_mode
                     follow_mode = False
                     presentation_mode = False
                 elif event.key == pygame.K_p:
+                    intro_cinematic_active = False
                     presentation_mode = not presentation_mode
                     cinematic_mode = False
                     follow_mode = False
@@ -380,9 +548,19 @@ def main():
                     show_orbits = not show_orbits
                 elif event.key == pygame.K_t:
                     show_trails = not show_trails
+                elif event.key == pygame.K_b:
+                    intro_cinematic_active = False
+                    cinematic_mode = False
+                    presentation_mode = False
+                    follow_mode = False
+                    destruction_target = 0.0 if destruction_target > 0.5 else 1.0
+                    shockwave_start = now
+                    shockwave_strength = 0.62 if destruction_target < 0.5 else 1.0
                 elif event.key == pygame.K_g:
                     show_principles = not show_principles
                 elif event.key == pygame.K_m:
+                    intro_cinematic_active = False
+                    cinematic_mode = False
                     mouse_captured = not mouse_captured
                     pygame.event.set_grab(mouse_captured)
                     pygame.mouse.set_visible(not mouse_captured)
@@ -397,6 +575,7 @@ def main():
                 ):
                     idx = event.key - pygame.K_1
                     if 0 <= idx < len(planets):
+                        intro_cinematic_active = False
                         selected_index = idx
                         follow_mode = True
                         cinematic_mode = False
@@ -405,14 +584,27 @@ def main():
                 elif event.key == pygame.K_F12:
                     screenshot_counter += 1
                     pending_screenshot = os.path.join(BASE_DIR, f"screenshot_{screenshot_counter:04d}.png")
+                elif event.key in (pygame.K_w, pygame.K_a, pygame.K_s, pygame.K_d, pygame.K_q, pygame.K_e):
+                    intro_cinematic_active = False
+                    cinematic_mode = False
             elif event.type == pygame.MOUSEMOTION:
                 if mouse_captured:
+                    intro_cinematic_active = False
+                    cinematic_mode = False
                     camera.process_mouse(event.rel[0], event.rel[1])
             elif event.type == pygame.MOUSEWHEEL:
+                intro_cinematic_active = False
+                cinematic_mode = False
                 camera.process_scroll(event.y)
+
+        if intro_cinematic_active and now >= intro_cinematic_end:
+            intro_cinematic_active = False
+            cinematic_mode = False
+            camera.fov = 45.0
 
         if not paused:
             update_orbits(sun, planets, dt, simulation_speed)
+        destruction_level = destruction_amount(destruction_level, destruction_target, dt)
 
         if presentation_mode:
             selected_index = int((now * 0.14) % len(planets))
@@ -422,17 +614,20 @@ def main():
         for body in tracked_bodies:
             update_trail(trail_history[body.name], body.current_position(), trail_length)
 
-        if presentation_mode:
+        if intro_cinematic_active:
+            elapsed = intro_cinematic_duration - max(0.0, intro_cinematic_end - now)
+            desired_position, desired_target, desired_fov = intro_camera_pose(elapsed, now, planets)
+            camera.snap_to(desired_position, desired_target)
+            camera.fov = desired_fov
+        elif destruction_level > 0.02 or destruction_target > 0.5:
+            camera.blend_to(glm.vec3(0.0, 215.0, 285.0), glm.vec3(0.0, -4.0, 0.0), dt, position_sharpness=2.6, target_sharpness=3.2)
+            camera.fov = lerp_float(camera.fov, 62.0, 1.0 - math.exp(-2.2 * dt))
+        elif presentation_mode:
             desired_position, desired_target = selected_camera_pose(selected_planet, now, "presentation")
             camera.blend_to(desired_position, desired_target, dt, position_sharpness=2.8, target_sharpness=3.6)
         elif cinematic_mode:
-            orbit_t = now * 0.08
-            desired_position = glm.vec3(
-                math.cos(orbit_t) * 155.0,
-                72.0 + math.sin(orbit_t * 0.7) * 20.0,
-                math.sin(orbit_t) * 155.0,
-            )
-            camera.blend_to(desired_position, glm.vec3(0.0, 0.0, 0.0), dt, position_sharpness=2.1, target_sharpness=2.8)
+            desired_position, desired_target = cinematic_camera_pose(now)
+            camera.blend_to(desired_position, desired_target, dt, position_sharpness=2.1, target_sharpness=2.8)
         elif follow_mode:
             desired_position, desired_target = selected_camera_pose(selected_planet, now, "follow")
             camera.blend_to(desired_position, desired_target, dt, position_sharpness=4.8, target_sharpness=6.2)
@@ -442,8 +637,13 @@ def main():
         comet_pos = comet_position(now)
         update_trail(comet_points, comet_pos, 220)
 
+        shock_amount, shock_radius = shockwave_values(now, shockwave_start, shockwave_strength)
         projection = glm.perspective(glm.radians(camera.fov), WIDTH / HEIGHT, 0.1, 2000.0)
-        view = camera.view_matrix()
+        if shock_amount > 0.001:
+            shake = camera_shake_offset(now, shock_amount)
+            view = glm.lookAt(camera.position + shake, camera.position + shake + camera.front, camera.up)
+        else:
+            view = camera.view_matrix()
 
         # ── 1. Render scene into HDR FBO ─────────────────────────────────────
         glBindFramebuffer(GL_FRAMEBUFFER, hdr_fbo)
@@ -501,7 +701,7 @@ def main():
         set_vec3(glow_program, "uCenter", glm.vec3(0.0, 0.0, 0.0))
         set_vec3(glow_program, "uCameraRight", camera.right)
         set_vec3(glow_program, "uCameraUp", camera.up)
-        set_float(glow_program, "uSize", 42.0)
+        set_float(glow_program, "uSize", 42.0 * body_destroy_scale(sun, destruction_level, now))
         set_mat4(glow_program, "uView", view)
         set_mat4(glow_program, "uProjection", projection)
         glow_quad.draw()
@@ -519,20 +719,37 @@ def main():
         set_float(planet_program, "uAmbientStrength", 0.08)
         set_float(planet_program, "uTime", now)   # animated Sun
 
-        sun.draw(sphere_mesh, planet_program)
+        sun.draw(sphere_mesh, planet_program, scale_multiplier=body_destroy_scale(sun, destruction_level, now))
         for planet in planets:
-            planet.draw(sphere_mesh, planet_program)
-        moon.draw(sphere_mesh, planet_program)
+            planet.draw(
+                sphere_mesh,
+                planet_program,
+                body_destroy_offset(planet, destruction_level, now),
+                body_destroy_scale(planet, destruction_level, now),
+            )
+            draw_body_fragments(planet, fragment_mesh, planet_program, destruction_level, now)
+        moon.draw(
+            sphere_mesh,
+            planet_program,
+            body_destroy_offset(moon, destruction_level, now),
+            body_destroy_scale(moon, destruction_level, now),
+        )
+        draw_body_fragments(moon, fragment_mesh, planet_program, destruction_level, now)
 
         glEnable(GL_BLEND)
         glDepthMask(GL_FALSE)
-        earth_clouds.draw(sphere_mesh, planet_program)
+        earth_clouds.draw(
+            sphere_mesh,
+            planet_program,
+            body_destroy_offset(earth, destruction_level, now),
+            max(0.02, body_destroy_scale(earth, destruction_level, now) * (1.0 - smoothstep01(destruction_level) * 0.45)),
+        )
         glDepthMask(GL_TRUE)
 
         glEnable(GL_BLEND)
         glDepthMask(GL_FALSE)
         glDisable(GL_CULL_FACE)
-        saturn_ring.draw(ring_mesh, planet_program)
+        saturn_ring.draw(ring_mesh, planet_program, body_destroy_offset(saturn_ring.saturn, destruction_level, now))
         glEnable(GL_CULL_FACE)
         glDepthMask(GL_TRUE)
 
@@ -546,7 +763,10 @@ def main():
         set_mat4(atmosphere_program, "uProjection", projection)
         set_vec3(atmosphere_program, "uViewPos", camera.position)
         # Slightly larger sphere around Earth
-        atm_model = earth.model_matrix()
+        atm_model = earth.model_matrix(
+            body_destroy_offset(earth, destruction_level, now),
+            body_destroy_scale(earth, destruction_level, now),
+        )
         atm_scale = glm.scale(glm.mat4(1.0), glm.vec3(1.12))
         set_mat4(atmosphere_program, "uModel", atm_model * atm_scale)
         set_vec3(atmosphere_program, "uAtmosphereColor", glm.vec3(0.2, 0.5, 1.0))
@@ -599,28 +819,53 @@ def main():
         set_float(composite_program, "uBloomStrength", 1.2)
         set_float(composite_program, "uTime", now)
         set_float(composite_program, "uModePulse", 1.0 if (presentation_mode or cinematic_mode) else 0.35)
+        set_float(composite_program, "uShockAmount", shock_amount)
+        set_float(composite_program, "uShockRadius", shock_radius)
         post_quad.draw()
 
         # ── 5. UI overlay (after composite so it is not tone-mapped) ────────
         glDisable(GL_DEPTH_TEST)
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        if show_labels:
+        if show_labels and not intro_cinematic_active:
             label_bodies = [sun] + planets + [moon]
             for body in label_bodies:
-                screen = project_to_screen(body.world_position, view, projection)
+                screen = project_to_screen(body.world_position + body_destroy_offset(body, destruction_level, now), view, projection)
                 if screen is None:
                     continue
                 color = (1.0, 0.86, 0.45, 1.0) if body.name == selected_planet.name else (0.74, 0.88, 1.0, 0.92)
                 text_renderer.draw(body.name, screen[0] + 7, screen[1] - 9, color, small=True)
-        mode = "PRESENTATION" if presentation_mode else ("CINEMATIC" if cinematic_mode else ("FOLLOW" if follow_mode else "FREE"))
-        text_renderer.draw("NEXT-LEVEL SOLAR SYSTEM SHOWCASE", 16, 16, (1.0, 0.86, 0.36, 1.0))
-        text_renderer.draw(f"Mode: {mode}  |  {selected_planet.name}  |  Speed: {simulation_speed:.2f}x  |  FPS: {current_fps:.0f}", 16, 40, (0.78, 0.92, 1.0, 0.95), small=True)
-        text_renderer.draw("Use the controls panel on the right for the full key guide.", 16, 60, (0.70, 0.82, 0.95, 0.86), small=True)
-        draw_planet_panel(text_renderer, selected_planet, 16, HEIGHT - 124)
-        draw_controls_panel(text_renderer, WIDTH - 390, HEIGHT - 384)
-        if show_principles:
-            draw_principles_panel(text_renderer, WIDTH - 430, 18)
+                if body.name == selected_planet.name:
+                    text_renderer.draw("Sharjeel & Suhaib", screen[0] + 7, screen[1] + 10, (1.0, 0.86, 0.45, 0.98), small=True)
+        selected_screen = project_to_screen(
+            selected_planet.world_position + body_destroy_offset(selected_planet, destruction_level, now),
+            view,
+            projection,
+        )
+        if selected_screen is not None and not intro_cinematic_active:
+            text_renderer.draw("Sharjeel & Suhaib", selected_screen[0] + 10, selected_screen[1] + 28, (1.0, 0.86, 0.45, 1.0))
+        mode = "INTRO" if intro_cinematic_active else ("PRESENTATION" if presentation_mode else ("CINEMATIC" if cinematic_mode else ("FOLLOW" if follow_mode else "FREE")))
+        if destruction_level > 0.05:
+            mode = "SYSTEM COLLAPSE" if destruction_target > 0.5 else "SYSTEM RESTORE"
+        text_renderer.draw(APP_TITLE.upper(), 16, 16, (1.0, 0.86, 0.36, 1.0))
+        text_renderer.draw("Sharjeel", 16, 40, (1.0, 0.86, 0.45, 1.0))
+        text_renderer.draw("Suhaib", 16, 64, (1.0, 0.86, 0.45, 1.0))
+        trail_status = "ON" if show_trails else "OFF"
+        text_renderer.draw(f"Mode: {mode}  |  {selected_planet.name}  |  Speed: {simulation_speed:.2f}x  |  Trails: {trail_status}  |  FPS: {current_fps:.0f}", 16, 88, (0.78, 0.92, 1.0, 0.95), small=True)
+        if intro_cinematic_active:
+            seconds_left = max(0.0, intro_cinematic_end - now)
+            intro_elapsed = intro_cinematic_duration - seconds_left
+            text_renderer.draw(intro_caption(intro_elapsed), 16, HEIGHT - 86, (1.0, 0.86, 0.36, 1.0))
+            text_renderer.draw(f"Free exploration begins in {seconds_left:04.1f}s  |  Press WASD to control  |  T add/remove trails", 16, HEIGHT - 56, (0.78, 0.92, 1.0, 0.92), small=True)
+        elif destruction_level > 0.05:
+            action = "Fragments restoring into orbit" if destruction_target < 0.5 else "Planets shattering into fragments"
+            text_renderer.draw(f"{action}  |  Press B to {'shatter again' if destruction_target < 0.5 else 'restore'}", 16, 108, (1.0, 0.42, 0.30, 0.98), small=True)
+        else:
+            text_renderer.draw("Use the controls panel on the right for the full key guide.", 16, 108, (0.70, 0.82, 0.95, 0.86), small=True)
+            draw_planet_panel(text_renderer, selected_planet, 16, HEIGHT - 124)
+            draw_controls_panel(text_renderer, WIDTH - 390, HEIGHT - 384)
+            if show_principles:
+                draw_principles_panel(text_renderer, WIDTH - 430, 18)
         glEnable(GL_DEPTH_TEST)
 
         if pending_screenshot is not None:
@@ -637,7 +882,7 @@ def main():
             frame_counter = 0
             fps_timer = now
             pygame.display.set_caption(
-                f"Advanced OpenGL Solar System — HDR Bloom | {current_fps:5.1f} FPS | {mode} | {selected_planet.name} | speed {simulation_speed:.2f}x"
+                f"{APP_TITLE} - HDR Bloom | {current_fps:5.1f} FPS | {mode} | {selected_planet.name} | speed {simulation_speed:.2f}x"
             )
 
     pygame.quit()
@@ -664,12 +909,13 @@ def comet_position(t):
 
 
 def draw_planet_panel(text_renderer, planet, x, y):
-    draw_ui_panel(x - 10, y - 10, 380, 112, (0.03, 0.06, 0.10, 0.68), (0.16, 0.22, 0.30, 0.92))
+    draw_ui_panel(x - 10, y - 10, 380, 132, (0.03, 0.06, 0.10, 0.68), (0.16, 0.22, 0.30, 0.92))
     text_renderer.draw("SELECTED BODY", x, y, (1.0, 0.82, 0.36, 1.0), small=True)
     text_renderer.draw(f"{planet.name}", x, y + 20, (0.85, 0.95, 1.0, 1.0))
-    text_renderer.draw(f"Orbit radius: {planet.orbit_radius:.1f} | Orbit speed: {planet.orbit_speed:.3f}", x, y + 46, (0.68, 0.84, 1.0, 0.95), small=True)
-    text_renderer.draw(f"Self rotation: {planet.rotation_speed:.2f} | Shininess: {planet.shininess:.0f}", x, y + 66, (0.68, 0.84, 1.0, 0.95), small=True)
-    text_renderer.draw("Scene graph + MVP + texture + Phong material", x, y + 86, (0.72, 1.0, 0.72, 0.95), small=True)
+    text_renderer.draw("Sharjeel & Suhaib", x, y + 46, (1.0, 0.86, 0.45, 1.0))
+    text_renderer.draw(f"Orbit radius: {planet.orbit_radius:.1f} | Orbit speed: {planet.orbit_speed:.3f}", x, y + 74, (0.68, 0.84, 1.0, 0.95), small=True)
+    text_renderer.draw(f"Self rotation: {planet.rotation_speed:.2f} | Shininess: {planet.shininess:.0f}", x, y + 94, (0.68, 0.84, 1.0, 0.95), small=True)
+    text_renderer.draw("Scene graph + MVP + texture + Phong material", x, y + 114, (0.72, 1.0, 0.72, 0.95), small=True)
 
 
 def draw_principles_panel(text_renderer, x, y):
@@ -708,14 +954,15 @@ def draw_controls_panel(text_renderer, x, y):
         ("F            follow selected planet", (0.82, 0.93, 1.0, 0.96), True),
         ("C            cinematic mode", (0.82, 0.93, 1.0, 0.96), True),
         ("P            presentation mode", (0.82, 0.93, 1.0, 0.96), True),
-        ("T            toggle trails", (0.82, 0.93, 1.0, 0.96), True),
+        ("B            shockwave shatter / restore", (1.0, 0.72, 0.55, 0.98), True),
+        ("T            add / remove trails", (0.82, 0.93, 1.0, 0.96), True),
         ("O            toggle orbits", (0.82, 0.93, 1.0, 0.96), True),
         ("L            toggle labels", (0.82, 0.93, 1.0, 0.96), True),
         ("G            toggle principles/info panel", (0.82, 0.93, 1.0, 0.96), True),
         ("F12          take screenshot", (0.82, 0.93, 1.0, 0.96), True),
         ("Esc          quit", (0.82, 0.93, 1.0, 0.96), True),
     ]
-    draw_ui_panel(x - 12, y - 12, 350, 350, (0.03, 0.06, 0.10, 0.68), (0.16, 0.22, 0.30, 0.92))
+    draw_ui_panel(x - 12, y - 12, 350, 370, (0.03, 0.06, 0.10, 0.68), (0.16, 0.22, 0.30, 0.92))
     for i, (line, color, small) in enumerate(lines):
         text_renderer.draw(line, x, y + i * 19, color, small=small)
 

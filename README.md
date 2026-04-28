@@ -38,6 +38,8 @@ A real-time, physically-inspired 3D Solar System simulation built from scratch w
 
 ## 🎮 Controls
 
+The app starts with a 16-second cinematic intro: a wide solar-system reveal, a Sun pass, an Earth/Moon shot, and a Saturn flyby. It then automatically switches to free exploration. Press any movement/view mode control to start exploring sooner.
+
 | Key | Action |
 |---|---|
 | `W A S D` | Move camera (hold `Shift` for 3× speed) |
@@ -51,6 +53,8 @@ A real-time, physically-inspired 3D Solar System simulation built from scratch w
 | `F` | Toggle **Follow** mode (camera locks onto selected planet) |
 | `C` | Toggle **Cinematic** mode (slow orbit around the whole system) |
 | `P` | Toggle **Presentation** mode (auto-tours every planet) |
+| `B` | Shockwave shatter planets into fragments / restore the solar system |
+| `T` | Add / remove orbital trails |
 | `L` | Toggle planet name labels |
 | `O` | Toggle orbit guide lines |
 | `G` | Toggle CG-principles overlay |

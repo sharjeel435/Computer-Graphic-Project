@@ -1,10 +1,10 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title Advanced OpenGL Solar System
+title Computer Graphics Solar System
 
 echo ============================================================
-echo   ADVANCED OPENGL 3.3 SOLAR SYSTEM
+echo   COMPUTER GRAPHICS SOLAR SYSTEM
 echo ============================================================
 echo.
 

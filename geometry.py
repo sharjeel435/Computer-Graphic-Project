@@ -213,11 +213,11 @@ def create_orbit_line(radius, inclination=0.0, segments=256):
     inc = math.radians(inclination)
     for i in range(segments):
         theta = 2.0 * math.pi * i / segments
-        x = math.cos(theta) * radius
-        z = math.sin(theta) * radius
-        y = math.sin(inc) * z
-        z2 = math.cos(inc) * z
-        vertices.extend([x, y, z2])
+        orbital_x = math.cos(theta) * radius
+        orbital_z = -math.sin(theta) * radius
+        x = math.cos(inc) * orbital_x
+        y = math.sin(inc) * orbital_x
+        vertices.extend([x, y, orbital_z])
 
     arr = np.asarray(vertices, dtype=np.float32)
     vao = glGenVertexArrays(1)

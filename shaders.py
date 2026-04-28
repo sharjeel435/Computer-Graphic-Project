@@ -381,15 +381,26 @@ uniform float uExposure;
 uniform float uBloomStrength;
 uniform float uTime;
 uniform float uModePulse;
+uniform float uShockAmount;
+uniform float uShockRadius;
 out vec4 FragColor;
 void main() {
     const float gamma = 2.2;
-    vec3 color = texture(uScene, vTexCoord).rgb;
-    vec3 bloom  = texture(uBloom,  vTexCoord).rgb;
-    color += bloom * uBloomStrength;
+    vec2 center = vec2(0.5);
+    vec2 fromCenter = vTexCoord - center;
+    float dist = length(fromCenter);
+    vec2 dir = fromCenter / max(dist, 0.0001);
+    float ring = exp(-pow((dist - uShockRadius) * 18.0, 2.0)) * uShockAmount;
+    vec2 uv = clamp(vTexCoord + dir * ring * 0.035, vec2(0.001), vec2(0.999));
+
+    vec3 color = texture(uScene, uv).rgb;
+    vec3 bloom  = texture(uBloom,  uv).rgb;
+    color += bloom * (uBloomStrength + uShockAmount * 1.65);
     float vignette = smoothstep(1.2, 0.2, length(vTexCoord - vec2(0.5)));
     float pulse = 1.0 + 0.03 * sin(uTime * 0.45) * uModePulse;
     color *= mix(0.92, 1.04, vignette) * pulse;
+    color += vec3(1.0, 0.42, 0.18) * ring * 1.8;
+    color *= 1.0 + uShockAmount * 0.22;
     color = mix(color, color * vec3(1.02, 0.99, 0.96), 0.18);
     // Reinhard tone mapping
     vec3 mapped = vec3(1.0) - exp(-color * uExposure);
